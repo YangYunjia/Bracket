@@ -109,6 +109,69 @@ def partial_u(angle=90, sf=0.2, ef=0.8, base_l=100, base_w=60,
     return m
 
 
+# ── side-edge and multi-level builders ───────────────────────────────────────
+
+def cross_bracket(angle=90, base_l=80, base_w=60, arm_l=45, t=2.0, inner_r=5.0):
+    """Plus shape: one arm from each of the 4 base edges."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0], [1,0,0], [0,1,0], base_l, base_w, name='base')
+    m.extend(base, 0, angle, arm_l)   # e0: −T end
+    m.extend(base, 1, angle, arm_l)   # e1: +T end
+    m.extend(base, 2, angle, arm_l)   # e2: −W side
+    m.extend(base, 3, angle, arm_l)   # e3: +W side
+    m.mark_hole(base, base_l*0.5, base_w*0.5, 'F1')
+    return m
+
+
+def l_with_side_stiffener(angle=90, base_l=100, base_w=60, flange_l=50,
+                           stiff_l=30, sf=0.3, ef=0.7, t=2.0, inner_r=5.0):
+    """L-bracket (e1) with a partial stiffener rib from the side edge (e3)."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base   = m.add_panel([0,0,0], [1,0,0], [0,1,0], base_l, base_w, name='base')
+    flange, _ = m.extend(base, 1, angle,  flange_l)
+    m.extend(base, 3, angle, stiff_l, start_frac=sf, end_frac=ef)
+    m.mark_hole(base,   base_l*0.5,   base_w*0.5,      'F1')
+    m.mark_hole(flange, flange_l*0.5, flange.width*0.5, 'F2')
+    return m
+
+
+def deep_chain(angles=(90, -90, 90), lengths=(60, 50, 40, 30),
+               base_w=60, t=2.0, inner_r=5.0):
+    """4-panel chain: base → A → B → C, each bent from the e1 of the previous."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    panel = m.add_panel([0,0,0], [1,0,0], [0,1,0], lengths[0], base_w, name='base')
+    for a, l in zip(angles, lengths[1:]):
+        panel, _ = m.extend(panel, 1, a, l)
+    m.mark_hole(m.panels[0], lengths[0]*0.5, base_w*0.5, 'F1')
+    return m
+
+
+def z_with_side_tab(a1=90, a2=90, base_l=100, web_l=60, flange_l=50,
+                    tab_l=25, base_w=60, sf=0.2, ef=0.8, t=2.0, inner_r=5.0):
+    """Z-bracket plus a partial tab from the side edge (e3) of the web."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base   = m.add_panel([0,0,0], [1,0,0], [0,1,0], base_l, base_w, name='base')
+    web,   _ = m.extend(base, 1,  a1, web_l)
+    flange, _ = m.extend(web,  1, -a2, flange_l)
+    m.extend(web, 3, 90, tab_l, start_frac=sf, end_frac=ef)   # tab off web side
+    m.mark_hole(base,   base_l*0.5,   base_w*0.5,      'F1')
+    m.mark_hole(flange, flange_l*0.5, flange.width*0.5, 'F2')
+    return m
+
+
+def box_with_tabs(angle=90, base_l=100, base_w=60, arm_l=50, tab_l=20,
+                  sf=0.1, ef=0.9, t=2.0, inner_r=5.0):
+    """U-bracket with partial tabs folded from the +W sides of both arms."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base     = m.add_panel([0,0,0], [1,0,0], [0,1,0], base_l, base_w, name='base')
+    left,  _ = m.extend(base, 0, angle, arm_l)
+    right, _ = m.extend(base, 1, angle, arm_l)
+    m.extend(left,  3, 90, tab_l, start_frac=sf, end_frac=ef)
+    m.extend(right, 3, 90, tab_l, start_frac=sf, end_frac=ef)
+    m.mark_hole(base, base_l*0.5, base_w*0.5, 'F1')
+    return m
+
+
 # ─── sample table ─────────────────────────────────────────────────────────────
 
 SAMPLES = [
@@ -165,6 +228,18 @@ SAMPLES = [
      lambda: partial_z(a1=90, a2=90, sf=0.15, ef=0.75)),
     ('20_PU_90',    'Partial-U  90°  one arm 20%–80%',
      lambda: partial_u(angle=90, sf=0.20, ef=0.80)),
+
+    # Side-edge and multi-level extensions
+    ('21_Cross_90',        'Cross bracket  90°  (all 4 edges)',
+     lambda: cross_bracket(angle=90)),
+    ('22_L_side_stiffener','L-bracket + side stiffener  90°',
+     lambda: l_with_side_stiffener(angle=90)),
+    ('23_deep_chain',      '4-panel chain  90° / −90° / 90°',
+     lambda: deep_chain()),
+    ('24_Z_side_tab',      'Z-bracket + web side tab  90°',
+     lambda: z_with_side_tab()),
+    ('25_box_tabs',        'U-bracket + arm side tabs  90°',
+     lambda: box_with_tabs()),
 ]
 
 
@@ -173,4 +248,6 @@ if __name__ == '__main__':
     for name, title, builder in SAMPLES:
         m = builder()
         save(m, name, title)
+        m.print_tree()
+        print()
     print('Done.')

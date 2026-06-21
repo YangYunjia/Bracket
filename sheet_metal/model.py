@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .primitives import _n, FlatPanel, BendArc, PartialBendArc
+from .tree import PanelNode
 
 
 def extend_panel(parent, edge_idx, angle_deg, child_length,
@@ -76,20 +77,35 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
 
 
 class SheetMetalModel:
-    """Incrementally built sheet-metal mid-surface model."""
+    """Incrementally built sheet-metal mid-surface model.
+
+    Panel connectivity is recorded as a forest of PanelNode trees — one root
+    per add_panel() call.  Any panel (including ones produced by extend()) can
+    be used as the parent for further extend() calls.
+
+    Tree queries
+    ------------
+    m.node_of(panel)   → PanelNode
+    m.print_tree()     → ASCII tree of the full structure
+    """
 
     def __init__(self, t=2.0, inner_r=5.0):
-        self.t       = float(t)
-        self.inner_r = float(inner_r)
-        self.panels  = []
-        self.arcs    = []
-        self._holes  = []
+        self.t         = float(t)
+        self.inner_r   = float(inner_r)
+        self.panels    = []        # all FlatPanel objects in insertion order
+        self.arcs      = []        # all arc objects in insertion order
+        self._holes    = []
+        self.roots     = []        # root PanelNodes (one per add_panel call)
+        self._node_map = {}        # id(FlatPanel) → PanelNode
 
     def add_panel(self, origin, T, W, length, width, name=None):
         if name is None:
             name = f'P{len(self.panels)}'
         p = FlatPanel(origin, T, W, length, width, self.t, name)
+        node = PanelNode(p)
         self.panels.append(p)
+        self.roots.append(node)
+        self._node_map[id(p)] = node
         return p
 
     def extend(self, parent, edge_idx, angle_deg, child_length,
@@ -101,9 +117,23 @@ class SheetMetalModel:
             start_frac=start_frac, end_frac=end_frac,
             blend_r=blend_r, taper=taper,
         )
+        parent_node = self._node_map[id(parent)]
+        child_node  = PanelNode(child, parent=parent_node, edge_idx=edge_idx,
+                                arc=arc, start_frac=start_frac, end_frac=end_frac)
+        parent_node.children.append(child_node)
+        self._node_map[id(child)] = child_node
         self.panels.append(child)
         self.arcs.append(arc)
         return child, arc
+
+    def node_of(self, panel):
+        """Return the PanelNode for a given FlatPanel."""
+        return self._node_map[id(panel)]
+
+    def print_tree(self):
+        """Print the panel connectivity tree to stdout."""
+        for root in self.roots:
+            print(root.format_tree())
 
     def mark_hole(self, panel, u, v, label='F', r_vis=5.0):
         centre = panel.origin + u*panel.T + v*panel.W
