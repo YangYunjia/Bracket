@@ -172,6 +172,46 @@ def box_with_tabs(angle=90, base_l=100, base_w=60, arm_l=50, tab_l=20,
     return m
 
 
+# ── stamped recess builders ───────────────────────────────────────────────────
+
+def panel_with_rect_recess(base_l=150, base_w=100, t=2.0, inner_r=5.0):
+    """Flat panel with a single rounded-rectangle recess."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0], [1,0,0], [0,1,0], base_l, base_w, name='base')
+    m.add_recess(base, cx=base_l/2, cy=base_w/2,
+                 width=90, height=60, corner_r=12,
+                 r_top=4, r_bot=4, wall_h=6)
+    m.mark_hole(base, 20, base_w/2, 'F1')
+    m.mark_hole(base, base_l-20, base_w/2, 'F2')
+    return m
+
+
+def panel_with_circ_recess(base_l=150, base_w=100, t=2.0, inner_r=5.0):
+    """Flat panel with a circular recess (corner_r = width/2)."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0], [1,0,0], [0,1,0], base_l, base_w, name='base')
+    m.add_recess(base, cx=base_l/2, cy=base_w/2,
+                 width=60, height=60, corner_r=30,   # corner_r = width/2 → circle
+                 r_top=4, r_bot=4, wall_h=5)
+    m.mark_hole(base, 20, base_w/2, 'F1')
+    m.mark_hole(base, base_l-20, base_w/2, 'F2')
+    return m
+
+
+def l_bracket_with_recess(angle=90, base_l=150, base_w=90, flange_l=60,
+                           t=2.0, inner_r=5.0):
+    """L-bracket with a drawn recess on the base panel."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base   = m.add_panel([0,0,0], [1,0,0], [0,1,0], base_l, base_w, name='base')
+    flange, _ = m.extend(base, 1, angle, flange_l)
+    m.add_recess(base, cx=base_l/2, cy=base_w/2,
+                 width=80, height=50, corner_r=10,
+                 r_top=3, r_bot=3, wall_h=5)
+    m.mark_hole(base, 20, base_w/2, 'F1')
+    m.mark_hole(flange, flange_l/2, flange.width/2, 'F2')
+    return m
+
+
 # ─── sample table ─────────────────────────────────────────────────────────────
 
 SAMPLES = [
@@ -240,6 +280,14 @@ SAMPLES = [
      lambda: z_with_side_tab()),
     ('25_box_tabs',        'U-bracket + arm side tabs  90°',
      lambda: box_with_tabs()),
+
+    # Stamped recesses
+    ('26_rect_recess',   'Flat panel — rounded-rect recess  r4/w6/r4',
+     lambda: panel_with_rect_recess()),
+    ('27_circ_recess',   'Flat panel — circular recess  r4/w5/r4',
+     lambda: panel_with_circ_recess()),
+    ('28_L_recess',      'L-bracket + rect recess on base  90°',
+     lambda: l_bracket_with_recess()),
 ]
 
 

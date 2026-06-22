@@ -8,6 +8,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .primitives import _n, FlatPanel, BendArc, PartialBendArc
 from .tree import PanelNode
+from .recess import StampedRecess
 
 
 def extend_panel(parent, edge_idx, angle_deg, child_length,
@@ -94,6 +95,7 @@ class SheetMetalModel:
         self.inner_r   = float(inner_r)
         self.panels    = []        # all FlatPanel objects in insertion order
         self.arcs      = []        # all arc objects in insertion order
+        self.recesses  = []        # all StampedRecess objects
         self._holes    = []
         self.roots     = []        # root PanelNodes (one per add_panel call)
         self._node_map = {}        # id(FlatPanel) → PanelNode
@@ -126,6 +128,29 @@ class SheetMetalModel:
         self.arcs.append(arc)
         return child, arc
 
+    def add_recess(self, panel, cx, cy, width, height, corner_r,
+                   r_top, r_bot, depth=None, wall_h=None,
+                   n_boundary=80, n_profile=20):
+        """Stamp a drawn recess onto an existing panel.
+
+        cx, cy   : centre of recess in panel local coords (from panel.origin,
+                   along panel.T and panel.W)
+        width    : outer footprint width  (along panel.T)
+        height   : outer footprint height (along panel.W)
+        corner_r : rounded-rectangle corner radius (clamped to min(W,H)/2)
+        r_top    : top bend radius
+        r_bot    : bottom bend radius
+        depth    : total depth = r_top + wall_h + r_bot  (or specify wall_h)
+        wall_h   : straight wall height (derived from depth if omitted)
+
+        Returns the StampedRecess object.
+        """
+        rec = StampedRecess(panel, cx, cy, width, height, corner_r,
+                            r_top, r_bot, depth=depth, wall_h=wall_h,
+                            n_boundary=n_boundary, n_profile=n_profile)
+        self.recesses.append(rec)
+        return rec
+
     def node_of(self, panel):
         """Return the PanelNode for a given FlatPanel."""
         return self._node_map[id(panel)]
@@ -141,6 +166,7 @@ class SheetMetalModel:
                             'label': label, 'r': r_vis})
 
     def render(self, ax=None, color_panel='#4a90c4', color_bend='#2e6ea6',
+               color_recess='#3a7abf',
                alpha_surf=0.85, ec='#1a3a52', lw=0.4, elev=28., azim=-50.):
         if ax is None:
             fig = plt.figure(figsize=(10, 8))
@@ -156,6 +182,11 @@ class SheetMetalModel:
                 arc.faces(), alpha=alpha_surf,
                 facecolor=color_bend, edgecolor=ec, linewidth=lw))
 
+        for rec in self.recesses:
+            ax.add_collection3d(Poly3DCollection(
+                rec.faces(), alpha=alpha_surf,
+                facecolor=color_recess, edgecolor=ec, linewidth=lw))
+
         hole_colors = ['#d62728', '#2ca02c', '#9467bd', '#ff7f0e']
         for i, h in enumerate(self._holes):
             c, ctr, n, r = hole_colors[i % 4], h['centre'], h['normal'], h['r']
@@ -170,8 +201,9 @@ class SheetMetalModel:
             ax.text(*(ctr + n*r*2.5), h['label'],
                     fontsize=10, color=c, fontweight='bold')
 
-        pts = ([pt for p   in self.panels for f in p.faces()   for pt in f] +
-               [pt for arc in self.arcs   for f in arc.faces() for pt in f])
+        pts = ([pt for p   in self.panels   for f in p.faces()   for pt in f] +
+               [pt for arc in self.arcs    for f in arc.faces() for pt in f] +
+               [pt for rec in self.recesses for f in rec.faces() for pt in f])
         pts = np.array(pts)
         lo, hi = pts.min(0), pts.max(0)
         mid    = (lo + hi) / 2
