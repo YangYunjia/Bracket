@@ -113,8 +113,8 @@ def _sample_profile(r_top, wall_h, r_bot, N):
             sb = s - L_top - L_wall
             θ  = (sb / L_bot) * (0.5*np.pi) if L_bot > 1e-12 else 0.5*np.pi
             θ  = min(θ, 0.5*np.pi)
-            us[i] = r_top + r_bot * np.sin(θ)
-            vs[i] = -(r_top + wall_h + r_bot * (1.0 - np.cos(θ)))
+            us[i] = r_top + r_bot * (1.0 - np.cos(θ))
+            vs[i] = -(r_top + wall_h + r_bot * np.sin(θ))
 
     return us, vs
 
