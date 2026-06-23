@@ -35,7 +35,19 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
     (child : FlatPanel, arc : BendArc | PartialBendArc)
     """
     p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
-    L_edge = float(np.linalg.norm(p1_full - p0_full))
+    L_edge  = float(np.linalg.norm(p1_full - p0_full))
+    ed_unit = (p1_full - p0_full) / L_edge
+
+    # Trim the reference edge to the flat (non-rounded-corner) region so that
+    # PartialBendArc blending never extends into the parent's corner-arc zone.
+    # Only trim an end where the child does not itself reach the corner.
+    if hasattr(parent, '_edge_flat_trims'):
+        ts, te = parent._edge_flat_trims(edge_idx)
+        if start_frac > 1e-6:
+            p0_full = p0_full + ts * ed_unit
+        if end_frac < 1.0 - 1e-6:
+            p1_full = p1_full - te * ed_unit
+        L_edge = float(np.linalg.norm(p1_full - p0_full))
 
     p0 = p0_full + start_frac * (p1_full - p0_full)
     p1 = p0_full + end_frac   * (p1_full - p0_full)

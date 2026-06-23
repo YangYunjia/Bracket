@@ -205,6 +205,10 @@ class FlatPanel:
         ((0, False), (3, True)),
     ]
 
+    # Which FlatPanel corner is at the start and end of each edge.
+    # e0: C0→C3, e1: C1→C2, e2: C0→C1, e3: C3→C2
+    _EDGE_CORNERS = [(0, 3), (1, 2), (0, 1), (3, 2)]
+
     def __init__(self, origin, T, W, length, width, t=2.0, name='P',
                  corner_r=0.0):
         self.origin      = np.asarray(origin, float)
@@ -240,6 +244,21 @@ class FlatPanel:
                 if not at_start and ef > 1.0 - 1e-6:
                     return True
         return False
+
+    def _edge_flat_trims(self, edge_idx):
+        """Return (trim_start, trim_end) distances that the flat region of edge
+        edge_idx is set back from each corner by corner rounding.
+
+        A trim is non-zero only when corner_r > 0 and the corner at that end
+        is free (not blocked by any registered child).  All FlatPanel corners
+        are 90°, so the trim equals corner_r.
+        """
+        if self.corner_r == 0.0:
+            return 0.0, 0.0
+        c_start, c_end = self._EDGE_CORNERS[edge_idx]
+        ts = 0.0 if self._corner_blocked(c_start) else self.corner_r
+        te = 0.0 if self._corner_blocked(c_end)   else self.corner_r
+        return ts, te
 
     @property
     def N(self):
@@ -459,6 +478,44 @@ class PolygonPanel:
             if sf < 1e-6:
                 return True
         return False
+
+    def _corner_trim(self, i):
+        """Compute the corner-rounding trim length at vertex i.
+
+        Returns 0.0 if corner_r == 0, the vertex is concave, or the corner is
+        blocked by a registered child.  Otherwise uses the half-angle formula:
+            trim = corner_r * tan(φ/2)
+        where φ is the exterior deflection angle at vertex i.
+        """
+        if self.corner_r == 0.0 or self._corner_blocked(i):
+            return 0.0
+        n = len(self.vertices)
+        v     = self.vertices[i]
+        e_in  = v - self.vertices[(i - 1) % n]
+        e_out = self.vertices[(i + 1) % n] - v
+        l_in, l_out = np.linalg.norm(e_in), np.linalg.norm(e_out)
+        if l_in < 1e-12 or l_out < 1e-12:
+            return 0.0
+        e_in  /= l_in;  e_out /= l_out
+        cross = e_in[0]*e_out[1] - e_in[1]*e_out[0]
+        if cross <= 1e-6:
+            return 0.0
+        dot   = float(np.dot(e_in, e_out))
+        sin_h = np.sqrt(max(0.0, (1.0 - dot) / 2.0))
+        cos_h = np.sqrt(max(0.0, (1.0 + dot) / 2.0))
+        if cos_h < 1e-9:
+            return 0.0
+        return self.corner_r * sin_h / cos_h
+
+    def _edge_flat_trims(self, edge_idx):
+        """Return (trim_start, trim_end) for edge edge_idx.
+
+        edge_idx goes from vertex edge_idx to vertex (edge_idx+1)%n.
+        """
+        if self.corner_r == 0.0:
+            return 0.0, 0.0
+        n = len(self.vertices)
+        return self._corner_trim(edge_idx), self._corner_trim((edge_idx + 1) % n)
 
     def edge(self, i):
         """Return (p0, p1, edge_dir, outward_dir) for polygon edge i.

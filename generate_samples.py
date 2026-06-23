@@ -275,6 +275,53 @@ def polygon_recess_showcase(t=2.0, inner_r=5.0):
     return m
 
 
+def split_flange(t=2.0, inner_r=5.0):
+    """Base panel with two partial 90° flanges on the bottom edge, gap in middle."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0],[1,0,0],[0,1,0], 150, 80, name='base')
+    # e2 (bottom): two flanges each 45% wide, 10% gap
+    m.extend(base, 2, 90, 45, start_frac=0.00, end_frac=0.45)
+    m.extend(base, 2, 90, 45, start_frac=0.55, end_frac=1.00)
+    return m
+
+
+def three_equal_tabs(t=2.0, inner_r=4.0):
+    """Base panel with three equal tabs evenly spaced along the top edge."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0],[1,0,0],[0,1,0], 180, 70, name='base')
+    gap = 0.03          # 3% gap between tabs → ~5.4 mm gap on 180 mm edge
+    span = (1.0 - 2*gap) / 3
+    for k in range(3):
+        sf = k * (span + gap)
+        m.extend(base, 3, 90, 25, start_frac=sf, end_frac=sf + span)
+    return m
+
+
+def staggered_double_flanges(t=2.0, inner_r=5.0):
+    """Two edges each split into two partial flanges at different angles,
+    demonstrating per-edge span tracking and corner blocking interactions."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0],[1,0,0],[0,1,0], 160, 90, name='base', corner_r=8.0)
+    # bottom edge e2: left half 90°, right half 60°
+    m.extend(base, 2,  90, 40, start_frac=0.00, end_frac=0.48)
+    m.extend(base, 2,  60, 40, start_frac=0.52, end_frac=1.00)
+    # right edge e1: two short tabs
+    m.extend(base, 1, 90, 20, start_frac=0.10, end_frac=0.45)
+    m.extend(base, 1, 90, 20, start_frac=0.55, end_frac=0.90)
+    return m
+
+
+def mid_edge_tab_rounded(t=2.0, inner_r=5.0, corner_r=12.0):
+    """Panel with a mid-edge-only child: child spans 30%-70%, never touching
+    either endpoint, so all four corners remain free and get rounded."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0],[1,0,0],[0,1,0], 140, 80, name='base',
+                        corner_r=corner_r)
+    # e2 bottom, 30–70% only — does NOT reach frac=0 or frac=1
+    m.extend(base, 2, 90, 40, start_frac=0.30, end_frac=0.70)
+    return m
+
+
 def rounded_l_bracket(angle=90, base_l=120, base_w=70, flange_l=50,
                        t=2.0, inner_r=5.0, corner_r=10.0):
     """L-bracket with rounded free corners.
@@ -421,6 +468,16 @@ SAMPLES = [
      lambda: triangle_panel_chain()),
     ('33_polygon_recesses',   'Flat panel — triangle / pentagon / hexagon recesses',
      lambda: polygon_recess_showcase()),
+
+    # Multi-child per edge
+    ('37_split_flange',           'Base + two partial 90° flanges on bottom edge  gap=10%',
+     lambda: split_flange()),
+    ('38_three_equal_tabs',       'Base + three equal 90° tabs along top edge',
+     lambda: three_equal_tabs()),
+    ('39_staggered_double_flanges','Two edges each split: bottom 90°/60°, right two tabs  r=8 mm',
+     lambda: staggered_double_flanges()),
+    ('40_mid_edge_tab_rounded',   'Mid-edge-only tab [30%–70%]: all four corners free → rounded',
+     lambda: mid_edge_tab_rounded()),
 
     # Rounded corners
     ('34_rounded_L',       'L-bracket 90°  r=10 mm — C0 & C3 free, C1 & C2 sharp',
