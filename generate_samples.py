@@ -322,6 +322,103 @@ def mid_edge_tab_rounded(t=2.0, inner_r=5.0, corner_r=12.0):
     return m
 
 
+def concave_l_panel(t=2.0, inner_r=5.0, corner_r=8.0):
+    """L-shaped polygon panel.
+
+    CCW vertices: (0,0)→(120,0)→(120,40)→(60,40)→(60,90)→(0,90)
+    Concave re-entrant corner at (60,40) — skipped by rounding.
+    Five convex corners: the two that are free (not touched by flanges) are rounded.
+
+    Edge map (polygon edge i goes from vertex i to vertex (i+1)%6):
+      e0 (0,0)→(120,0)   bottom          outward: -W
+      e1 (120,0)→(120,40) right-low      outward: +T
+      e2 (120,40)→(60,40) inner h-step   outward: +W  (faces into cutout)
+      e3 (60,40)→(60,90)  inner v-step   outward: +T  (faces into cutout)
+      e4 (60,90)→(0,90)   top-left       outward: +W
+      e5 (0,90)→(0,0)     left           outward: -T
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    verts = [[0,0],[120,0],[120,40],[60,40],[60,90],[0,90]]
+    base  = m.add_polygon_panel([0,0,0],[1,0,0],[0,1,0], verts,
+                                 name='L', corner_r=corner_r)
+    m.extend(base, 0, 90, 35)   # bottom full flange (blocks v0, v1)
+    m.extend(base, 4, 90, 30)   # top-left flange   (blocks v4, v5)
+    # v2=(120,40) is free: both adj. edges (e1, e2) unused → rounded ✓
+    # v3=(60,40) is the concave corner → stays sharp regardless
+    return m
+
+
+def concave_l_inner_tab(t=2.0, inner_r=5.0, corner_r=6.0):
+    """L-shaped panel with a tab on the inner step edge (e2).
+
+    Demonstrates extending from a concave polygon edge — the flange grows
+    into the cutout area, creating an internal shelf feature.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    verts = [[0,0],[120,0],[120,40],[60,40],[60,90],[0,90]]
+    base  = m.add_polygon_panel([0,0,0],[1,0,0],[0,1,0], verts,
+                                 name='L', corner_r=corner_r)
+    m.extend(base, 0, 90, 35)          # bottom flange
+    # e2: inner horizontal step (120,40)→(60,40), outward = +W (north into cutout)
+    m.extend(base, 2, 90, 20)          # inner-step shelf
+    return m
+
+
+def concave_u_panel(t=2.0, inner_r=5.0, corner_r=6.0):
+    """U-shaped (notch) polygon panel.
+
+    CCW vertices: (0,0)→(140,0)→(140,80)→(90,80)→(90,40)→(50,40)→(50,80)→(0,80)
+    Concave corners at (90,40) and (50,40) — the notch-base re-entrants.
+    Flanges on the bottom and both arm tops.
+
+    Edge map:
+      e0 (0,0)→(140,0)    bottom              outward: -W
+      e1 (140,0)→(140,80) right               outward: +T
+      e2 (140,80)→(90,80) top of right arm    outward: +W
+      e3 (90,80)→(90,40)  inner right wall    outward: +T
+      e4 (90,40)→(50,40)  inner notch base    outward: +W (faces into notch)
+      e5 (50,40)→(50,80)  inner left wall     outward: -T
+      e6 (50,80)→(0,80)   top of left arm     outward: +W
+      e7 (0,80)→(0,0)     left                outward: -T
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    verts = [[0,0],[140,0],[140,80],[90,80],[90,40],[50,40],[50,80],[0,80]]
+    base  = m.add_polygon_panel([0,0,0],[1,0,0],[0,1,0], verts,
+                                 name='U', corner_r=corner_r)
+    m.extend(base, 0, 90, 40)   # bottom full flange
+    m.extend(base, 2, 90, 25)   # top of right arm
+    m.extend(base, 6, 90, 25)   # top of left arm
+    return m
+
+
+def concave_t_panel(t=2.0, inner_r=5.0, corner_r=6.0):
+    """T-shaped polygon panel (crossbar + central stem).
+
+    CCW vertices: (0,0)→(120,0)→(120,30)→(80,30)→(80,90)→(40,90)→(40,30)→(0,30)
+    Concave corners at (80,30) and (40,30) — where the stem meets the crossbar.
+    Flanges on bottom, stem top, and both crossbar ends.
+
+    Edge map:
+      e0 (0,0)→(120,0)   bottom of crossbar   outward: -W
+      e1 (120,0)→(120,30) right end            outward: +T
+      e2 (120,30)→(80,30) inner step right     outward: +W (into shoulder gap)
+      e3 (80,30)→(80,90)  right side of stem   outward: +T
+      e4 (80,90)→(40,90)  top of stem          outward: +W
+      e5 (40,90)→(40,30)  left side of stem    outward: -T
+      e6 (40,30)→(0,30)   inner step left      outward: +W (into shoulder gap)
+      e7 (0,30)→(0,0)     left end             outward: -T
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    verts = [[0,0],[120,0],[120,30],[80,30],[80,90],[40,90],[40,30],[0,30]]
+    base  = m.add_polygon_panel([0,0,0],[1,0,0],[0,1,0], verts,
+                                 name='T', corner_r=corner_r)
+    m.extend(base, 0, 90, 30)   # bottom of crossbar
+    m.extend(base, 1, 90, 20)   # right end of crossbar
+    m.extend(base, 4, 90, 25)   # top of stem
+    m.extend(base, 7, 90, 20)   # left end of crossbar
+    return m
+
+
 def rounded_l_bracket(angle=90, base_l=120, base_w=70, flange_l=50,
                        t=2.0, inner_r=5.0, corner_r=10.0):
     """L-bracket with rounded free corners.
@@ -468,6 +565,16 @@ SAMPLES = [
      lambda: triangle_panel_chain()),
     ('33_polygon_recesses',   'Flat panel — triangle / pentagon / hexagon recesses',
      lambda: polygon_recess_showcase()),
+
+    # Concave polygon panels
+    ('41_L_concave',       'L-shaped panel — 1 concave corner sharp, 3 flanges',
+     lambda: concave_l_panel()),
+    ('42_L_inner_tab',     'L-shaped panel — flange on inner step edge (into cutout)',
+     lambda: concave_l_inner_tab()),
+    ('43_U_concave',       'U-shaped (notch) panel — 2 concave corners, arm flanges',
+     lambda: concave_u_panel()),
+    ('44_T_concave',       'T-shaped panel — 2 concave corners at stem base, 4 flanges',
+     lambda: concave_t_panel()),
 
     # Multi-child per edge
     ('37_split_flange',           'Base + two partial 90° flanges on bottom edge  gap=10%',
