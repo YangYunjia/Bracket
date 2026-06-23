@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+import math
 from sheet_metal import SheetMetalModel
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
@@ -212,6 +213,124 @@ def l_bracket_with_recess(angle=90, base_l=150, base_w=90, flange_l=60,
     return m
 
 
+def hexagonal_panel(t=2.0, inner_r=5.0):
+    """Hexagonal panel with a flange on one edge and a polygon recess."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    R = 60.0   # circumradius of hexagon
+    hex_verts = [[R*math.cos(i*math.pi/3), R*math.sin(i*math.pi/3)]
+                 for i in range(6)]
+    # Shift so all coords are positive
+    min_u = min(v[0] for v in hex_verts)
+    min_v = min(v[1] for v in hex_verts)
+    hex_verts = [[u - min_u + 5, v - min_v + 5] for u, v in hex_verts]
+
+    base = m.add_polygon_panel([0, 0, 0], [1, 0, 0], [0, 1, 0],
+                                hex_verts, name='hex_base')
+    # Extend a flange from edge 0 (bottom edge)
+    flange, _ = m.extend(base, 0, 90, 40)
+    # Triangular polygon recess near the centre of the hex panel
+    cx = sum(v[0] for v in hex_verts) / 6
+    cy = sum(v[1] for v in hex_verts) / 6
+    tri = [[cx, cy+20], [cx+18, cy-12], [cx-18, cy-12]]
+    m.add_polygon_recess(base, tri, corner_r=4.0,
+                         r_top=3, r_bot=3, wall_h=4)
+    return m
+
+
+def triangle_panel_chain(t=2.0, inner_r=5.0):
+    """Triangle gusset with two child flanges on different edges."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    h = 80.0
+    tri_verts = [[0, 0], [120, 0], [60, h]]
+    base = m.add_polygon_panel([0, 0, 0], [1, 0, 0], [0, 1, 0],
+                                tri_verts, name='gusset')
+    m.extend(base, 0, 90, 35)           # flange on bottom edge
+    m.extend(base, 1, 90, 25)           # flange on right edge
+    return m
+
+
+def polygon_recess_showcase(t=2.0, inner_r=5.0):
+    """Flat panel with three different polygon recesses: tri, penta, hex."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    panel = m.add_panel([0, 0, 0], [1, 0, 0], [0, 1, 0], 280, 100, name='base')
+
+    # Triangular recess (left)
+    tri = [[45, 20], [90, 80], [0, 80]]
+    m.add_polygon_recess(panel, tri, corner_r=6.0,
+                         r_top=3, r_bot=3, wall_h=5)
+
+    # Pentagonal recess (centre)
+    def poly(n, cx, cy, r, phase=0):
+        return [[cx + r*math.cos(2*math.pi*i/n + phase),
+                 cy + r*math.sin(2*math.pi*i/n + phase)] for i in range(n)]
+    penta = poly(5, 145, 50, 30, phase=math.pi/2)
+    m.add_polygon_recess(panel, penta, corner_r=5.0,
+                         r_top=3, r_bot=3, wall_h=4, draft_angle=10.0)
+
+    # Hexagonal recess (right)
+    hexa = poly(6, 235, 50, 30)
+    m.add_polygon_recess(panel, hexa, corner_r=4.0,
+                         r_top=3, r_bot=3, wall_h=5, draft_angle=0.0)
+
+    return m
+
+
+def rounded_l_bracket(angle=90, base_l=120, base_w=70, flange_l=50,
+                       t=2.0, inner_r=5.0, corner_r=10.0):
+    """L-bracket with rounded free corners.
+
+    base extends from e1 (right edge):
+      e1 used → C1 (e1,e2) and C2 (e1,e3) blocked.
+      C0 (e0,e2) and C3 (e3,e0) are free → rounded.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0],[1,0,0],[0,1,0], base_l, base_w,
+                        name='base', corner_r=corner_r)
+    m.extend(base, 1, angle, flange_l)
+    return m
+
+
+def rounded_base_one_arm(angle=90, base_l=120, base_w=70, arm_l=50,
+                          t=2.0, inner_r=5.0, corner_r=8.0):
+    """Panel with one arm from the bottom edge — top two corners are free.
+
+    e2 (bottom) used → C0 (e0,e2) and C1 (e1,e2) blocked.
+    C2 (e1,e3) and C3 (e3,e0) are free → rounded.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    base = m.add_panel([0,0,0],[1,0,0],[0,1,0], base_l, base_w,
+                        name='base', corner_r=corner_r)
+    m.extend(base, 2, angle, arm_l)
+    return m
+
+
+def rounded_hex_panel(t=2.0, inner_r=5.0, corner_r=8.0):
+    """Hexagonal panel with one flange — 4 free hex corners get rounded."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    R = 55.0
+    hex_verts = [[R*math.cos(i*math.pi/3) + R + 5,
+                  R*math.sin(i*math.pi/3) + R + 5] for i in range(6)]
+    base = m.add_polygon_panel([0,0,0],[1,0,0],[0,1,0],
+                                hex_verts, name='hex', corner_r=corner_r)
+    m.extend(base, 0, 90, 35)   # extend from edge 0
+    # Edge 0 connects vertices 0→1, so vertices 0 and 1 are blocked.
+    # The other 4 vertices are free → their corners get rounded.
+    return m
+
+
+def panel_with_drafted_recess(draft_angle=20.0, t=2.0, inner_r=5.0):
+    """Flat panel showing a rect and a circular recess, both with drafted walls."""
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    panel = m.add_panel([0, 0, 0], [1, 0, 0], [0, 1, 0], 200, 120, name='base')
+    # Drafted rectangular recess — 20° draft
+    m.add_recess(panel, cx=65, cy=60, width=80, height=60, corner_r=14,
+                 r_top=3, r_bot=3, wall_h=6, draft_angle=draft_angle)
+    # Drafted circular recess (corner_r = width/2) — same draft
+    m.add_recess(panel, cx=155, cy=60, width=50, height=50, corner_r=25,
+                 r_top=3, r_bot=3, wall_h=4, draft_angle=draft_angle)
+    return m
+
+
 # ─── sample table ─────────────────────────────────────────────────────────────
 
 SAMPLES = [
@@ -288,6 +407,28 @@ SAMPLES = [
      lambda: panel_with_circ_recess()),
     ('28_L_recess',      'L-bracket + rect recess on base  90°',
      lambda: l_bracket_with_recess()),
+
+    # Drafted sidewall recesses
+    ('29_drafted_recess_20', 'Flat panel — rect + circ recess  20° draft wall',
+     lambda: panel_with_drafted_recess(draft_angle=20.0)),
+    ('30_drafted_recess_35', 'Flat panel — rect + circ recess  35° draft wall',
+     lambda: panel_with_drafted_recess(draft_angle=35.0)),
+
+    # Polygon panels and recesses
+    ('31_hex_panel',          'Hexagonal panel + flange + triangular recess',
+     lambda: hexagonal_panel()),
+    ('32_triangle_gusset',    'Triangular gusset panel + two flanges',
+     lambda: triangle_panel_chain()),
+    ('33_polygon_recesses',   'Flat panel — triangle / pentagon / hexagon recesses',
+     lambda: polygon_recess_showcase()),
+
+    # Rounded corners
+    ('34_rounded_L',       'L-bracket 90°  r=10 mm — C0 & C3 free, C1 & C2 sharp',
+     lambda: rounded_l_bracket()),
+    ('35_rounded_one_arm', 'Panel + bottom arm 90°  r=8 mm — C2 & C3 free, C0 & C1 sharp',
+     lambda: rounded_base_one_arm()),
+    ('36_rounded_hex',     'Hexagonal panel  r=8 mm  1 edge extended, 4 free corners rounded',
+     lambda: rounded_hex_panel()),
 ]
 
 

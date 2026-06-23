@@ -6,9 +6,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from .primitives import _n, FlatPanel, BendArc, PartialBendArc
+from .primitives import _n, FlatPanel, BendArc, PartialBendArc, PolygonPanel
 from .tree import PanelNode
-from .recess import StampedRecess
+from .recess import StampedRecess, PolygonRecess
 
 
 def extend_panel(parent, edge_idx, angle_deg, child_length,
@@ -100,10 +100,31 @@ class SheetMetalModel:
         self.roots     = []        # root PanelNodes (one per add_panel call)
         self._node_map = {}        # id(FlatPanel) → PanelNode
 
-    def add_panel(self, origin, T, W, length, width, name=None):
+    def add_panel(self, origin, T, W, length, width, name=None, corner_r=0.0):
         if name is None:
             name = f'P{len(self.panels)}'
-        p = FlatPanel(origin, T, W, length, width, self.t, name)
+        p = FlatPanel(origin, T, W, length, width, self.t, name, corner_r=corner_r)
+        node = PanelNode(p)
+        self.panels.append(p)
+        self.roots.append(node)
+        self._node_map[id(p)] = node
+        return p
+
+    def add_polygon_panel(self, origin, T, W, vertices, name=None, corner_r=0.0):
+        """Add a flat panel with an arbitrary polygon outline.
+
+        origin   : 3-D position of the panel coordinate origin
+        T, W     : two orthogonal 3-D vectors spanning the panel plane
+        vertices : (N, 2) list/array of (u, v) pairs in the T-W local frame
+        name     : optional label
+        corner_r : rounding radius applied at free corners
+
+        Returns the PolygonPanel.  Use m.extend(panel, edge_idx, …) to grow
+        child panels from any polygon edge.
+        """
+        if name is None:
+            name = f'P{len(self.panels)}'
+        p = PolygonPanel(origin, T, W, vertices, self.t, name, corner_r=corner_r)
         node = PanelNode(p)
         self.panels.append(p)
         self.roots.append(node)
@@ -119,6 +140,7 @@ class SheetMetalModel:
             start_frac=start_frac, end_frac=end_frac,
             blend_r=blend_r, taper=taper,
         )
+        parent._register_child(edge_idx, start_frac, end_frac)
         parent_node = self._node_map[id(parent)]
         child_node  = PanelNode(child, parent=parent_node, edge_idx=edge_idx,
                                 arc=arc, start_frac=start_frac, end_frac=end_frac)
@@ -130,23 +152,51 @@ class SheetMetalModel:
 
     def add_recess(self, panel, cx, cy, width, height, corner_r,
                    r_top, r_bot, depth=None, wall_h=None,
+                   draft_angle=0.0,
                    n_boundary=80, n_profile=20):
         """Stamp a drawn recess onto an existing panel.
 
-        cx, cy   : centre of recess in panel local coords (from panel.origin,
-                   along panel.T and panel.W)
-        width    : outer footprint width  (along panel.T)
-        height   : outer footprint height (along panel.W)
-        corner_r : rounded-rectangle corner radius (clamped to min(W,H)/2)
-        r_top    : top bend radius
-        r_bot    : bottom bend radius
-        depth    : total depth = r_top + wall_h + r_bot  (or specify wall_h)
-        wall_h   : straight wall height (derived from depth if omitted)
+        cx, cy      : centre of recess in panel local coords (from panel.origin,
+                      along panel.T and panel.W)
+        width       : outer footprint width  (along panel.T)
+        height      : outer footprint height (along panel.W)
+        corner_r    : rounded-rectangle corner radius (clamped to min(W,H)/2)
+        r_top       : top bend radius
+        r_bot       : bottom bend radius
+        depth       : total recess depth (or specify wall_h)
+        wall_h      : straight wall vertical height (derived from depth if omitted)
+        draft_angle : wall slope angle from vertical in degrees (default 0)
 
         Returns the StampedRecess object.
         """
         rec = StampedRecess(panel, cx, cy, width, height, corner_r,
                             r_top, r_bot, depth=depth, wall_h=wall_h,
+                            draft_angle=draft_angle,
+                            n_boundary=n_boundary, n_profile=n_profile)
+        self.recesses.append(rec)
+        return rec
+
+    def add_polygon_recess(self, panel, polygon, corner_r=0.0,
+                           r_top=3.0, r_bot=3.0, depth=None, wall_h=None,
+                           draft_angle=0.0,
+                           n_boundary=80, n_profile=20):
+        """Stamp a drawn recess with a polygon footprint onto a panel.
+
+        panel       : the host FlatPanel or PolygonPanel
+        polygon     : (N, 2) list of (u, v) vertices in panel T-W local frame
+        corner_r    : rounding radius at convex polygon corners (default 0)
+        r_top       : top bend radius
+        r_bot       : bottom bend radius
+        depth       : total recess depth  (or specify wall_h)
+        wall_h      : straight wall height
+        draft_angle : wall tilt from panel-normal, degrees (default 0)
+
+        Returns the PolygonRecess object.
+        """
+        rec = PolygonRecess(panel, polygon, corner_r=corner_r,
+                            r_top=r_top, r_bot=r_bot,
+                            depth=depth, wall_h=wall_h,
+                            draft_angle=draft_angle,
                             n_boundary=n_boundary, n_profile=n_profile)
         self.recesses.append(rec)
         return rec
