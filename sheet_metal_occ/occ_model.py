@@ -4,6 +4,10 @@ sheet_metal_occ.occ_model — pythonOCC backend with TRUE OCC B-Rep geometry.
 Every shape is an exact OCC B-Rep object (no mesh wrapping):
   FlatPanel / PolygonPanel → single planar OCC face (arc corners via GC_MakeArcOfCircle)
   SplinePanel              → single planar OCC face (Geom_BSplineCurve for curved edges)
+  LoftPanel                → BRepOffsetAPI_ThruSections loft between Curve3D profiles.
+                             Curve3D.line  → exact line-segment wire (BRepBuilderAPI_MakeEdge)
+                             Curve3D.arc   → exact arc wire (GC_MakeArcOfCircle)
+                             Curve3D.bspline/polyline → dense polygon wire approximation
   BendArc (two backends, selectable via arc_backend parameter):
     'loft' (default) — arc-guided ThruSections loft.  Handles non-aligned parent/
                         child edges: different lengths, non-parallel directions, B-splines.
@@ -54,7 +58,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from sheet_metal import SheetMetalModel
-from sheet_metal.primitives import BendArc, PartialBendArc, CurvedBendArc
+from sheet_metal.primitives import BendArc, PartialBendArc, CurvedBendArc, Curve3D, LoftPanel
 from sheet_metal.recess import _sample_profile
 
 
@@ -284,16 +288,122 @@ def _polygon_wire_occ(verts_2d, corner_r, blocked, origin, T, W,
     return wb.Wire() if wb.IsDone() else None
 
 
+# ─── Curve3D → OCC wire ───────────────────────────────────────────────────────
+
+def _curve3d_to_occ_wire(crv, n_poly=64):
+    """Convert a Curve3D to an OCC wire.
+
+    Curve3D.line    → exact single-edge wire (BRepBuilderAPI_MakeEdge p0→p1)
+    Curve3D.arc     → exact arc wire         (GC_MakeArcOfCircle)
+    Curve3D.bspline → exact Geom_BSplineCurve wire
+    Curve3D.polyline → polygon wire from stored points
+    """
+    kind = crv._kind
+
+    if kind == 'line':
+        edge = BRepBuilderAPI_MakeEdge(_to_pnt(crv.p0), _to_pnt(crv.p1)).Edge()
+        wb = BRepBuilderAPI_MakeWire(edge)
+        return wb.Wire() if wb.IsDone() else None
+
+    if kind == 'arc':
+        # Sample 3 points: start, mid, end for GC_MakeArcOfCircle
+        pts = crv._eval_raw(np.array([0.0, 0.5, 1.0]))
+        try:
+            arc_geom = GC_MakeArcOfCircle(
+                _to_pnt(pts[0]), _to_pnt(pts[1]), _to_pnt(pts[2]))
+            if arc_geom.IsDone():
+                edge = BRepBuilderAPI_MakeEdge(arc_geom.Value()).Edge()
+                wb = BRepBuilderAPI_MakeWire(edge)
+                return wb.Wire() if wb.IsDone() else None
+        except Exception:
+            pass
+        # Fall through to polygon approximation
+
+    if kind == 'bspline':
+        cp   = crv._cp
+        deg  = crv._deg
+        knts = crv._knots
+        n_p  = len(cp)
+        distinct, mults = [], []
+        for k in knts:
+            if not distinct or abs(k - distinct[-1]) > 1e-12:
+                distinct.append(float(k))
+                mults.append(1)
+            else:
+                mults[-1] += 1
+        n_k = len(distinct)
+        poles_arr = TColgp_Array1OfPnt(1, n_p)
+        knots_arr = TColStd_Array1OfReal(1, n_k)
+        mults_arr = TColStd_Array1OfInteger(1, n_k)
+        for ki, p in enumerate(cp):
+            poles_arr.SetValue(ki + 1, _to_pnt(p))
+        for ki, k in enumerate(distinct):
+            knots_arr.SetValue(ki + 1, k)
+        for ki, m in enumerate(mults):
+            mults_arr.SetValue(ki + 1, m)
+        try:
+            bspl = Geom_BSplineCurve(poles_arr, knots_arr, mults_arr, deg)
+            edge = BRepBuilderAPI_MakeEdge(bspl, 0.0, 1.0).Edge()
+            wb = BRepBuilderAPI_MakeWire(edge)
+            return wb.Wire() if wb.IsDone() else None
+        except Exception:
+            pass
+        # Fall through to polygon approximation
+
+    # polyline / fallback: dense polygon wire
+    if kind == 'polyline':
+        pts = crv._pts
+    else:
+        pts = crv.sample(n_poly)
+    poly = BRepBuilderAPI_MakePolygon()
+    for p in pts:
+        poly.Add(_to_pnt(p))
+    if poly.IsDone():
+        wb = BRepBuilderAPI_MakeWire(poly.Wire())
+        return wb.Wire() if wb.IsDone() else None
+    return None
+
+
+def _shape_for_loft_panel(panel):
+    """OCC ThruSections loft for a LoftPanel.
+
+    Each Curve3D profile becomes an OCC wire via _curve3d_to_occ_wire().
+    ruled=True  → BRepOffsetAPI_ThruSections(isSolid=False, isRuled=True)
+    ruled=False → BRepOffsetAPI_ThruSections(isSolid=False, isRuled=False)
+
+    Falls back to mesh compound if the loft fails.
+    """
+    try:
+        thru = BRepOffsetAPI_ThruSections(False, panel.ruled)
+        n_added = 0
+        for crv in panel.profiles:
+            wire = _curve3d_to_occ_wire(crv)
+            if wire is not None:
+                thru.AddWire(wire)
+                n_added += 1
+        if n_added >= 2:
+            thru.Build()
+            if thru.IsDone():
+                return thru.Shape()
+    except Exception:
+        pass
+    return _compound_from_face_lists(panel.faces())
+
+
 # ─── panel shape builder ──────────────────────────────────────────────────────
 
 def _shape_for_panel(panel):
-    """Single exact OCC planar face for any panel type.
+    """Single exact OCC face for any panel type.
 
     FlatPanel: 2-D vertices synthesised from length/width.
     PolygonPanel / SplinePanel: uses panel.vertices directly.
-    Falls back to mesh compound if wire or face construction fails.
+    LoftPanel: ThruSections loft between Curve3D profiles.
+    Falls back to mesh compound if construction fails.
     """
     from sheet_metal.primitives import FlatPanel, PolygonPanel, SplinePanel
+
+    if isinstance(panel, LoftPanel):
+        return _shape_for_loft_panel(panel)
 
     try:
         if isinstance(panel, FlatPanel):
@@ -892,6 +1002,14 @@ class OCC_BracketModel:
         return self._sm.add_spline_panel(origin, T, W, vertices, edge_curves,
                                           name=name, corner_r=corner_r)
 
+    def add_loft_panel(self, profiles, ruled=True, name=None):
+        """Add a standalone LoftPanel.
+
+        profiles : list of Curve3D or [(x,y,z),(x,y,z)] pairs
+        ruled    : True → ruled; False → smooth loft
+        """
+        return self._sm.add_loft_panel(profiles, ruled=ruled, name=name)
+
     def extend(self, parent, edge_idx, angle_deg, child_length,
                bend_dir=+1, start_frac=0.0, end_frac=1.0,
                blend_r=None, taper='arc'):
@@ -899,6 +1017,19 @@ class OCC_BracketModel:
                                 bend_dir=bend_dir,
                                 start_frac=start_frac, end_frac=end_frac,
                                 blend_r=blend_r, taper=taper)
+
+    def extend_loft(self, parent, edge_idx, angle_deg, free_curve,
+                    bend_dir=+1, start_frac=0.0, end_frac=1.0,
+                    intermediate_curves=None, ruled=True):
+        """Extend a LoftPanel child from parent.
+
+        free_curve : Curve3D or [(x,y,z),(x,y,z)] for the far edge
+        """
+        return self._sm.extend_loft(
+            parent, edge_idx, angle_deg, free_curve,
+            bend_dir=bend_dir,
+            start_frac=start_frac, end_frac=end_frac,
+            intermediate_curves=intermediate_curves, ruled=ruled)
 
     def add_recess(self, panel, cx, cy, width, height, corner_r,
                    r_top, r_bot, depth=None, wall_h=None,

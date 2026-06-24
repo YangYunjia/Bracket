@@ -7,7 +7,8 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .primitives import (_n, FlatPanel, BendArc, PartialBendArc, PolygonPanel,
-                         BSplineEdge, SplinePanel, CurvedBendArc)
+                         BSplineEdge, SplinePanel, CurvedBendArc,
+                         Curve3D, LoftPanel)
 from .tree import PanelNode
 from .recess import StampedRecess, PolygonRecess
 
@@ -90,7 +91,11 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
 
     t     = parent.t
     alpha = np.radians(abs(angle_deg))
-    bdir  = float(bend_dir) * parent.N
+    # Use edge-local normal when available (e.g. LoftPanel has varying normal).
+    N_src = (parent.N_at_edge(edge_idx)
+             if hasattr(parent, 'N_at_edge')
+             else parent.N)
+    bdir  = float(bend_dir) * N_src
     r_n   = inner_r + t / 2
 
     # Check for a curved parent edge (SplinePanel only).
@@ -166,6 +171,98 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
             T_out=T_out, N_bend=bdir,
             alpha=alpha, r_n=r_n,
             blend_r=_br, taper=taper,
+        )
+    else:
+        arc = BendArc(p0=p0, p1=p1, T_out=T_out, N_bend=bdir,
+                      alpha=alpha, r_n=r_n)
+
+    return child, arc
+
+
+def extend_loft(parent, edge_idx, angle_deg, free_curve,
+                inner_r=5.0, bend_dir=+1,
+                start_frac=0.0, end_frac=1.0,
+                intermediate_curves=None, ruled=True):
+    """Extend a LoftPanel child from a parent panel edge.
+
+    Works like extend_panel() but creates a LoftPanel whose free edge is
+    the user-supplied Curve3D `free_curve` instead of a flat FlatPanel.
+
+    Parameters
+    ----------
+    parent             : FlatPanel | PolygonPanel | SplinePanel | LoftPanel
+    edge_idx           : edge index on the parent
+    angle_deg          : bend angle in degrees
+    free_curve         : Curve3D (or [(x,y,z),(x,y,z)] shorthand) for the
+                         free (far) edge of the child panel
+    inner_r            : inner bend radius
+    bend_dir           : +1 toward +N_parent, -1 toward -N_parent
+    start_frac         : fraction along parent edge where child starts (0–1)
+    end_frac           : fraction along parent edge where child ends   (0–1)
+    intermediate_curves: optional list of Curve3D for intermediate profiles
+    ruled              : True → ruled surface; False → smooth loft
+
+    Returns
+    -------
+    (child_LoftPanel, arc)
+    """
+    # ── Compute root edge geometry (same logic as extend_panel) ───────────────
+    p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
+    L_edge  = float(np.linalg.norm(p1_full - p0_full))
+    ed_unit = (p1_full - p0_full) / L_edge
+
+    if hasattr(parent, '_edge_flat_trims'):
+        ts, te = parent._edge_flat_trims(edge_idx)
+        if start_frac > 1e-6:
+            p0_full = p0_full + ts * ed_unit
+        if end_frac < 1.0 - 1e-6:
+            p1_full = p1_full - te * ed_unit
+        L_edge = float(np.linalg.norm(p1_full - p0_full))
+
+    p0 = p0_full + start_frac * (p1_full - p0_full)
+    p1 = p0_full + end_frac   * (p1_full - p0_full)
+
+    t     = parent.t
+    alpha = np.radians(abs(angle_deg))
+    N_src = (parent.N_at_edge(edge_idx)
+             if hasattr(parent, 'N_at_edge') else parent.N)
+    bdir  = float(bend_dir) * N_src
+    r_n   = inner_r + t / 2
+
+    # Root edge of the child: straight line from p0_child to p1_child
+    T_child = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
+    C0           = p0 + r_n * bdir
+    child_origin = C0 + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out)
+    C1           = p1 + r_n * bdir
+    child_far    = C1 + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out)
+
+    root_curve = Curve3D.line(child_origin, child_far)
+
+    # Coerce free_curve if a raw point list was passed
+    if not isinstance(free_curve, Curve3D):
+        pts = np.asarray(free_curve, float)
+        if pts.ndim == 2 and len(pts) == 2:
+            free_curve = Curve3D.line(pts[0], pts[1])
+        else:
+            free_curve = Curve3D('polyline', _pts=pts)
+
+    profiles = [root_curve]
+    if intermediate_curves:
+        profiles += list(intermediate_curves)
+    profiles.append(free_curve)
+
+    child = LoftPanel(profiles=profiles, ruled=ruled,
+                      name=f'{parent.name}.e{edge_idx}', t=t)
+
+    # Bend arc: always a straight BendArc along the straight root edge
+    is_partial = (start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)
+    if is_partial:
+        arc = PartialBendArc(
+            p0_full=p0_full, p1_full=p1_full,
+            s_start=start_frac * L_edge,
+            s_end=end_frac     * L_edge,
+            T_out=T_out, N_bend=bdir,
+            alpha=alpha, r_n=r_n,
         )
     else:
         arc = BendArc(p0=p0, p1=p1, T_out=T_out, N_bend=bdir,
@@ -251,6 +348,24 @@ class SheetMetalModel:
         self._node_map[id(p)] = node
         return p
 
+    def add_loft_panel(self, profiles, ruled=True, name=None):
+        """Add a standalone LoftPanel (not connected to an existing panel).
+
+        profiles : list of Curve3D or [(x,y,z),(x,y,z)] pairs
+        ruled    : True → ruled surface; False → smooth loft
+        name     : optional label
+
+        Returns the LoftPanel.
+        """
+        if name is None:
+            name = f'P{len(self.panels)}'
+        p = LoftPanel(profiles=profiles, ruled=ruled, name=name, t=self.t)
+        node = PanelNode(p)
+        self.panels.append(p)
+        self.roots.append(node)
+        self._node_map[id(p)] = node
+        return p
+
     def extend(self, parent, edge_idx, angle_deg, child_length,
                bend_dir=+1, start_frac=0.0, end_frac=1.0,
                blend_r=None, taper='arc'):
@@ -259,6 +374,43 @@ class SheetMetalModel:
             inner_r=self.inner_r, bend_dir=bend_dir,
             start_frac=start_frac, end_frac=end_frac,
             blend_r=blend_r, taper=taper,
+        )
+        parent._register_child(edge_idx, start_frac, end_frac)
+        parent_node = self._node_map[id(parent)]
+        child_node  = PanelNode(child, parent=parent_node, edge_idx=edge_idx,
+                                arc=arc, start_frac=start_frac, end_frac=end_frac)
+        parent_node.children.append(child_node)
+        self._node_map[id(child)] = child_node
+        self.panels.append(child)
+        self.arcs.append(arc)
+        return child, arc
+
+    def extend_loft(self, parent, edge_idx, angle_deg, free_curve,
+                    bend_dir=+1, start_frac=0.0, end_frac=1.0,
+                    intermediate_curves=None, ruled=True):
+        """Extend a LoftPanel child from parent.
+
+        Like extend() but creates a LoftPanel whose free edge is `free_curve`
+        instead of a flat FlatPanel.
+
+        Parameters
+        ----------
+        parent             : any panel type
+        edge_idx           : edge on parent
+        angle_deg          : bend angle in degrees
+        free_curve         : Curve3D or [(x,y,z),(x,y,z)] for the far edge
+        bend_dir           : +1 / -1
+        start_frac, end_frac: span along parent edge
+        intermediate_curves: optional list of Curve3D between root and free
+        ruled              : True (default) or False for smooth loft
+
+        Returns (LoftPanel child, arc).
+        """
+        child, arc = extend_loft(
+            parent, edge_idx, angle_deg, free_curve,
+            inner_r=self.inner_r, bend_dir=bend_dir,
+            start_frac=start_frac, end_frac=end_frac,
+            intermediate_curves=intermediate_curves, ruled=ruled,
         )
         parent._register_child(edge_idx, start_frac, end_frac)
         parent_node = self._node_map[id(parent)]
