@@ -11,7 +11,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import math
-from sheet_metal import SheetMetalModel
+from sheet_metal import SheetMetalModel, BSplineEdge, SplinePanel
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
 os.makedirs(OUT, exist_ok=True)
@@ -462,6 +462,127 @@ def rounded_hex_panel(t=2.0, inner_r=5.0, corner_r=8.0):
     return m
 
 
+# ─── spline panel builders ────────────────────────────────────────────────────
+
+def spline_wave_panel(t=2.0, inner_r=5.0):
+    """SplinePanel whose bottom edge is a gentle S-curve; straight-edge child.
+
+    The base panel is 120×80 with the bottom edge (e0: from (0,0) to (120,0))
+    replaced by an S-shaped B-spline.  One straight edge gets a 90° flange.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    # S-curve edge: from (0,0) up to midpoint then back down
+    crv_bot = BSplineEdge([[0,0],[30,20],[90,-20],[120,0]])
+    base = m.add_spline_panel(
+        origin=[0,0,0], T=[1,0,0], W=[0,1,0],
+        vertices=[[0,0],[120,0],[120,80],[0,80]],
+        edge_curves=[crv_bot, None, None, None],
+        name='wave',
+    )
+    m.extend(base, 2, 90, 40)   # right edge (straight) → FlatPanel child
+    return m
+
+
+def spline_arc_panel(t=2.0, inner_r=5.0):
+    """SplinePanel whose top edge approximates a convex arc; 90° flange on left.
+
+    A 5-control-point cubic B-spline approximates a circular arc on the top
+    edge (e2: from (120,70) to (0,70) in the CCW polygon), creating a
+    dome-like outline.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    # Top edge arcs up ~30 units at the midpoint
+    crv_top = BSplineEdge([[120,70],[90,100],[60,105],[30,100],[0,70]])
+    base = m.add_spline_panel(
+        origin=[0,0,0], T=[1,0,0], W=[0,1,0],
+        vertices=[[0,0],[120,0],[120,70],[0,70]],
+        edge_curves=[None, None, crv_top, None],
+        name='dome',
+    )
+    m.extend(base, 3, 90, 35)   # left edge (straight)
+    return m
+
+
+def spline_curved_bracket(t=2.0, inner_r=5.0):
+    """SplinePanel with a curved bottom edge; 90° CurvedBendArc + SplinePanel child.
+
+    The parent panel (100×60) has a convex-curved bottom edge (outward bulge
+    of ~20 mm at the midpoint).  Extending from this curved edge creates a
+    CurvedBendArc and a SplinePanel child whose root edge mirrors the curve.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    crv = BSplineEdge([[0,0],[25,-20],[75,-20],[100,0]])
+    base = m.add_spline_panel(
+        origin=[0,0,0], T=[1,0,0], W=[0,1,0],
+        vertices=[[0,0],[100,0],[100,60],[0,60]],
+        edge_curves=[crv, None, None, None],   # edge 0 is curved
+        name='base',
+    )
+    m.extend(base, 0, 90, 45)   # curved edge → CurvedBendArc + SplinePanel child
+    return m
+
+
+def spline_curved_U_bracket(t=2.0, inner_r=5.0):
+    """SplinePanel with two mirrored curved edges → two CurvedBendArcs.
+
+    The base panel (100×70) has both the bottom edge (e0) and the top edge (e2)
+    curved outward symmetrically.  Two 90° flanges are extended from those
+    curved edges, each generating a CurvedBendArc and a SplinePanel child.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    crv_bot = BSplineEdge([[0,0],[30,-18],[70,-18],[100,0]])
+    crv_top = BSplineEdge([[100,70],[70,88],[30,88],[0,70]])
+    base = m.add_spline_panel(
+        origin=[0,0,0], T=[1,0,0], W=[0,1,0],
+        vertices=[[0,0],[100,0],[100,70],[0,70]],
+        edge_curves=[crv_bot, None, crv_top, None],
+        name='base',
+    )
+    m.extend(base, 0, 90, 40)    # bottom curved → first arm
+    m.extend(base, 2, -90, 40)   # top curved → second arm (bends in -N direction)
+    return m
+
+
+def spline_s_bracket(t=2.0, inner_r=5.0):
+    """SplinePanel with a sinusoidal bottom edge + 90° CurvedBendArc.
+
+    More pronounced S-curve (3 inflection points, 6 control points) to
+    demonstrate higher-order B-spline geometry in the arc sweep.
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    crv = BSplineEdge([[0,0],[20,25],[50,-25],[70,25],[100,-15],[120,0]])
+    base = m.add_spline_panel(
+        origin=[0,0,0], T=[1,0,0], W=[0,1,0],
+        vertices=[[0,0],[120,0],[120,75],[0,75]],
+        edge_curves=[crv, None, None, None],
+        name='base',
+    )
+    m.extend(base, 0, 90, 50)
+    return m
+
+
+def spline_rounded_spline_panel(t=2.0, inner_r=5.0):
+    """SplinePanel: rectangular with two curved edges + corner_r on straight corners.
+
+    Bottom edge is a convex arc; top edge is a convex arc in the opposite sense.
+    Left and right edges are straight, with corner_r=10 on the four straight
+    corners (all four corners are at straight-edge junctions).
+    """
+    m = SheetMetalModel(t=t, inner_r=inner_r)
+    crv_bot = BSplineEdge([[0,0],[30,-15],[90,-15],[120,0]])
+    crv_top = BSplineEdge([[0,70],[30,85],[90,85],[120,70]])
+    base = m.add_spline_panel(
+        origin=[0,0,0], T=[1,0,0], W=[0,1,0],
+        vertices=[[0,0],[120,0],[120,70],[0,70]],
+        edge_curves=[crv_bot, None, crv_top, None],
+        name='base', corner_r=10.0,
+    )
+    # Extend from straight left and right edges (no curves involved)
+    m.extend(base, 1, 90, 35)   # right straight edge
+    m.extend(base, 3, 90, 35)   # left straight edge
+    return m
+
+
 def panel_with_drafted_recess(draft_angle=20.0, t=2.0, inner_r=5.0):
     """Flat panel showing a rect and a circular recess, both with drafted walls."""
     m = SheetMetalModel(t=t, inner_r=inner_r)
@@ -575,6 +696,22 @@ SAMPLES = [
      lambda: concave_u_panel()),
     ('44_T_concave',       'T-shaped panel — 2 concave corners at stem base, 4 flanges',
      lambda: concave_t_panel()),
+
+    # Spline panels — Phase 1 (curved outlines, straight-edge arcs)
+    ('45_spline_wave',        'SplinePanel S-curved bottom edge + straight 90° flange',
+     lambda: spline_wave_panel()),
+    ('46_spline_arc_dome',    'SplinePanel dome top edge + straight 90° flange',
+     lambda: spline_arc_panel()),
+
+    # Spline panels — Phase 2 (CurvedBendArc + SplinePanel child)
+    ('47_spline_curved_L',    'SplinePanel convex bottom edge → CurvedBendArc 90° L-bracket',
+     lambda: spline_curved_bracket()),
+    ('48_spline_curved_U',    'SplinePanel two curved edges → two CurvedBendArcs 90° U-bracket',
+     lambda: spline_curved_U_bracket()),
+    ('49_spline_S_bracket',   'SplinePanel sinusoidal edge (6-pt B-spline) → CurvedBendArc',
+     lambda: spline_s_bracket()),
+    ('50_spline_rounded',     'SplinePanel two curved edges + corner_r on straight corners + 2 flanges',
+     lambda: spline_rounded_spline_panel()),
 
     # Multi-child per edge
     ('37_split_flange',           'Base + two partial 90° flanges on bottom edge  gap=10%',

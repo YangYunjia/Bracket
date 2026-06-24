@@ -6,9 +6,44 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from .primitives import _n, FlatPanel, BendArc, PartialBendArc, PolygonPanel
+from .primitives import (_n, FlatPanel, BendArc, PartialBendArc, PolygonPanel,
+                         BSplineEdge, SplinePanel, CurvedBendArc)
 from .tree import PanelNode
 from .recess import StampedRecess, PolygonRecess
+
+
+def _arc_transform_curve(parent_crv, parent, alpha, r_n, bdir,
+                         T_child, W_child, child_origin):
+    """Return a BSplineEdge for the child's root edge (edge index 3).
+
+    Transforms each control point of the parent edge curve through the arc
+    geometry to produce the corresponding child-side curve in the child's
+    local (T_child, W_child) frame.  The result is reversed so that eval(0)
+    corresponds to the C3 endpoint and eval(1) to C0 (matching edge-3
+    direction in the CCW child SplinePanel).
+    """
+    cp_2d = parent_crv.control_pts   # (M, 2) in parent (u, v)
+    M     = len(cp_2d)
+    ts    = np.linspace(0.0, 1.0, M)
+
+    child_v = []
+    for ti, (ui, vi) in zip(ts, cp_2d):
+        p_i    = parent.origin + ui*parent.T + vi*parent.W
+        tang   = parent_crv.tangent(float(ti))
+        tn     = np.linalg.norm(tang)
+        if tn < 1e-12:
+            tang = np.array([1.0, 0.0])
+            tn   = 1.0
+        tang      /= tn
+        T_out_i    = _n(tang[1]*parent.T - tang[0]*parent.W)
+        C_i        = p_i + r_n * bdir
+        q_i        = C_i + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_i)
+        child_v.append(float(np.dot(q_i - child_origin, W_child)))
+
+    # Edge 3 in the child CCW polygon goes from C3 (v=max) to C0 (v=0).
+    # The arc-transformed curve goes C0→C3 (v increases), so reverse it.
+    child_cp = [[0.0, v] for v in reversed(child_v)]
+    return BSplineEdge(child_cp, parent_crv.degree)
 
 
 def extend_panel(parent, edge_idx, angle_deg, child_length,
@@ -19,8 +54,8 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
 
     Parameters
     ----------
-    parent      : FlatPanel
-    edge_idx    : 0–3  (see FlatPanel edge numbering)
+    parent      : FlatPanel | PolygonPanel | SplinePanel
+    edge_idx    : edge index on the parent panel
     angle_deg   : bend angle in degrees
     child_length: panel length after the bend
     inner_r     : inner bend radius (mm)
@@ -32,15 +67,16 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
 
     Returns
     -------
-    (child : FlatPanel, arc : BendArc | PartialBendArc)
+    (child, arc)
+    For straight parent edges : (FlatPanel,    BendArc | PartialBendArc)
+    For curved  parent edges  : (SplinePanel,  CurvedBendArc)
+                                (partial curved edges use PartialBendArc as approx)
     """
     p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
     L_edge  = float(np.linalg.norm(p1_full - p0_full))
     ed_unit = (p1_full - p0_full) / L_edge
 
-    # Trim the reference edge to the flat (non-rounded-corner) region so that
-    # PartialBendArc blending never extends into the parent's corner-arc zone.
-    # Only trim an end where the child does not itself reach the corner.
+    # Trim the reference edge to the flat (non-rounded-corner) region.
     if hasattr(parent, '_edge_flat_trims'):
         ts, te = parent._edge_flat_trims(edge_idx)
         if start_frac > 1e-6:
@@ -57,6 +93,55 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
     bdir  = float(bend_dir) * parent.N
     r_n   = inner_r + t / 2
 
+    # Check for a curved parent edge (SplinePanel only).
+    crv = parent.edge_curve(edge_idx) if hasattr(parent, 'edge_curve') else None
+
+    if crv is not None and not ((start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)):
+        # ── Curved full-edge path ──────────────────────────────────────────────
+        # T_out at the start of the child's span from the curve tangent.
+        tang_start  = crv.tangent(float(start_frac))
+        tn          = np.linalg.norm(tang_start)
+        if tn > 1e-12:
+            tang_start /= tn
+        T_out_start = _n(tang_start[1]*parent.T - tang_start[0]*parent.W)
+
+        T_child = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out_start)
+        W_child = edge_dir   # chord direction — child is flat
+
+        C0           = p0 + r_n * bdir
+        child_origin = C0 + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_start)
+
+        # child_width = projected distance from C0 to C3 along W_child.
+        tang_end = crv.tangent(float(end_frac))
+        tn_e     = np.linalg.norm(tang_end)
+        if tn_e > 1e-12:
+            tang_end /= tn_e
+        T_out_end  = _n(tang_end[1]*parent.T - tang_end[0]*parent.W)
+        C_end      = p1 + r_n * bdir
+        q_end      = C_end + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_end)
+        child_width = float(np.dot(q_end - child_origin, W_child))
+        if child_width < 1e-6:
+            child_width = float(np.linalg.norm(p1 - p0))
+
+        # Build child SplinePanel with arc-transformed root edge (edge 3).
+        root_crv = _arc_transform_curve(
+            crv, parent, alpha, r_n, bdir, T_child, W_child, child_origin)
+        child = SplinePanel(
+            origin=child_origin, T=T_child, W=W_child,
+            vertices=[[0, 0], [child_length, 0],
+                      [child_length, child_width], [0, child_width]],
+            edge_curves=[None, None, None, root_crv],
+            t=t, name=f'{parent.name}.e{edge_idx}',
+        )
+
+        arc = CurvedBendArc(
+            edge_curve=crv,
+            panel_origin=parent.origin, panel_T=parent.T, panel_W=parent.W,
+            N_bend=bdir, alpha=alpha, r_n=r_n,
+        )
+        return child, arc
+
+    # ── Straight-edge path (or partial curved — uses chord approximation) ──────
     T_child     = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
     W_child     = edge_dir
     child_width = float(np.linalg.norm(p1 - p0))
@@ -116,6 +201,29 @@ class SheetMetalModel:
         if name is None:
             name = f'P{len(self.panels)}'
         p = FlatPanel(origin, T, W, length, width, self.t, name, corner_r=corner_r)
+        node = PanelNode(p)
+        self.panels.append(p)
+        self.roots.append(node)
+        self._node_map[id(p)] = node
+        return p
+
+    def add_spline_panel(self, origin, T, W, vertices, edge_curves=None,
+                         name=None, corner_r=0.0):
+        """Add a flat panel whose edges can be B-spline curves.
+
+        origin      : 3-D position of the panel coordinate origin
+        T, W        : two orthogonal 3-D vectors spanning the panel plane
+        vertices    : (N, 2) list/array of (u, v) corners in the T-W local frame
+        edge_curves : list of N items (BSplineEdge | None); None = straight edge
+        name        : optional label
+        corner_r    : rounding radius at free straight-edge corners
+
+        Returns the SplinePanel.
+        """
+        if name is None:
+            name = f'P{len(self.panels)}'
+        p = SplinePanel(origin, T, W, vertices, edge_curves,
+                        self.t, name, corner_r=corner_r)
         node = PanelNode(p)
         self.panels.append(p)
         self.roots.append(node)
