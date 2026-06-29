@@ -162,7 +162,7 @@ def build_chain_bracket(p):
     free_curve, intermediates = _loft_profiles(
         a0_root, p['p1_w'], W_root, T_mid, lat_dir, p['mid_profiles'])
 
-    middle, _ = m.extend_pipe(p1, edge_idx=1,
+    middle, _ = m.extend_arm(p1, edge_idx=1, panel_type='loft',
                                angle_deg=p['mid_ang'],
                                free_curve=free_curve,
                                intermediate_curves=intermediates,

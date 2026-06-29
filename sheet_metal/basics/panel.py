@@ -457,19 +457,22 @@ class LoftPanel:
     when child panels are grown from this LoftPanel.
     """
 
-    def __init__(self, profiles, ruled=True, name='LP', t=2.0):
+    def __init__(self, profiles, t_start=None, t_end=None,
+                 spine_pts=None, ruled=False, name='LP', t=2.0):
         """
         Parameters
         ----------
-        profiles : list of Curve3D (or list of (x,y,z) tuples → converted to
-                   straight-line Curve3D automatically if exactly 2 entries)
-        ruled    : bool — ruled (True) or smooth (False) loft
-        name     : label string
-        t        : sheet thickness
+        profiles  : list of Curve3D (or [(x,y,z),(x,y,z)] shorthand)
+        t_start   : optional unit tangent at the root edge (for G1 with BendArc)
+        t_end     : optional unit tangent at the free edge (for G1 with BendArc)
+        spine_pts : optional list of 3-D spine waypoints (one per profile);
+                    defaults to profile midpoints
+        ruled     : bool — ruled (True) or smooth (False) loft
+        name      : label string
+        t         : sheet thickness
         """
         if len(profiles) < 2:
             raise ValueError('LoftPanel needs at least 2 profiles.')
-        # Auto-convert bare point lists: [(x,y,z),(x,y,z)] → Curve3D.line
         def _coerce(p):
             if isinstance(p, Curve3D):
                 return p
@@ -478,14 +481,23 @@ class LoftPanel:
                 raise ValueError('Profile must be a Curve3D or list of 3-D points.')
             if len(pts) == 2:
                 return Curve3D.line(pts[0], pts[1])
-            # >2 points: treat as polyline; build a degree-1 bspline approximation
-            # (just store as dense samples for now — OCC builder will polygon-wire them)
             return Curve3D('polyline', _pts=pts)
-        self.profiles  = [_coerce(p) for p in profiles]
-        self.ruled     = bool(ruled)
-        self.name      = str(name)
-        self.t         = float(t)
-        self._edge_spans = {}   # same child-tracking interface as FlatPanel
+        self.profiles    = [_coerce(p) for p in profiles]
+        self.ruled       = bool(ruled)
+        self.name        = str(name)
+        self.t           = float(t)
+        self._edge_spans = {}
+
+        self.t_start = n(np.asarray(t_start, float)) if t_start is not None else None
+        self.t_end   = n(np.asarray(t_end,   float)) if t_end   is not None else None
+
+        if spine_pts is not None:
+            if len(spine_pts) != len(self.profiles):
+                raise ValueError('spine_pts must have the same count as profiles.')
+            self.spine_pts = [np.asarray(p, float) for p in spine_pts]
+        else:
+            self.spine_pts = [(a + b) / 2.0
+                              for a, b in [p.endpoints() for p in self.profiles]]
 
     # ── normal helpers ────────────────────────────────────────────────────────
 
@@ -556,9 +568,9 @@ class LoftPanel:
             long  = n(a0_r - a0_f)   # pointing away from free end
             out   = n(np.cross(chord, self.N_at_edge(0)))
             return a0_r.copy(), b0_r.copy(), chord, out
-        if i == 1:   # free profile — outward dir points away from root
+        if i == 1:   # free profile — use t_end when set for G1 with downstream arc
             chord = n(b0_f - a0_f)
-            out   = n(a0_f - a0_r)
+            out   = self.t_end.copy() if self.t_end is not None else n(a0_f - a0_r)
             return a0_f.copy(), b0_f.copy(), chord, out
         if i == 2:   # first long edge (t=0 side)
             return a0_r.copy(), a0_f.copy(), n(a0_f - a0_r), self.N_at_edge(2)
