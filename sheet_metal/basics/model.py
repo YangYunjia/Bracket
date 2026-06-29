@@ -302,28 +302,28 @@ class SheetMetalModel:
         self._node_map[id(p)] = node
         return p
 
-    def add_spline_panel(self, origin, T, W, vertices, edge_curves=None,
-                         name=None, corner_r=0.0):
-        """Add a flat panel whose edges can be B-spline curves.
+    # def add_spline_panel(self, origin, T, W, vertices, edge_curves=None,
+    #                      name=None, corner_r=0.0):
+    #     """Add a flat panel whose edges can be B-spline curves.
 
-        origin      : 3-D position of the panel coordinate origin
-        T, W        : two orthogonal 3-D vectors spanning the panel plane
-        vertices    : (N, 2) list/array of (u, v) corners in the T-W local frame
-        edge_curves : list of N items (BSplineEdge | None); None = straight edge
-        name        : optional label
-        corner_r    : rounding radius at free straight-edge corners
+    #     origin      : 3-D position of the panel coordinate origin
+    #     T, W        : two orthogonal 3-D vectors spanning the panel plane
+    #     vertices    : (N, 2) list/array of (u, v) corners in the T-W local frame
+    #     edge_curves : list of N items (BSplineEdge | None); None = straight edge
+    #     name        : optional label
+    #     corner_r    : rounding radius at free straight-edge corners
 
-        Returns the SplinePanel.
-        """
-        if name is None:
-            name = f'P{len(self.panels)}'
-        p = SplinePanel(origin, T, W, vertices, edge_curves,
-                        self.t, name, corner_r=corner_r)
-        node = PanelNode(p)
-        self.panels.append(p)
-        self.roots.append(node)
-        self._node_map[id(p)] = node
-        return p
+    #     Returns the SplinePanel.
+    #     """
+    #     if name is None:
+    #         name = f'P{len(self.panels)}'
+    #     p = SplinePanel(origin, T, W, vertices, edge_curves,
+    #                     self.t, name, corner_r=corner_r)
+    #     node = PanelNode(p)
+    #     self.panels.append(p)
+    #     self.roots.append(node)
+    #     self._node_map[id(p)] = node
+    #     return p
 
     def add_polygon_panel(self, origin, T, W, vertices, name=None, corner_r=0.0):
         """Add a flat panel with an arbitrary polygon outline.

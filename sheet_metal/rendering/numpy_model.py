@@ -364,16 +364,16 @@ class NumpyBracketModel(SheetMetalModel):
             ax.text(*(ctr + n * r * 2.5), h['label'],
                     fontsize=10, color=c, fontweight='bold')
 
-        all_pts = ([pt for p   in self.panels   for f in _get_faces(p,   **q) for pt in f] +
-                   [pt for arc in self.arcs     for f in _get_faces(arc, **q) for pt in f] +
-                   [pt for rec in self.recesses for f in _get_faces(rec, **q) for pt in f])
-        if all_pts:
-            pts   = np.array(all_pts)
-            lo, hi = pts.min(0), pts.max(0)
-            mid   = (lo + hi) / 2
-            span  = max((hi - lo).max() * 0.65, 1.0)
-            for fn, m in zip([ax.set_xlim, ax.set_ylim, ax.set_zlim], mid):
-                fn(m - span, m + span)
+        # all_pts = ([pt for p   in self.panels   for f in _get_faces(p,   **q) for pt in f] +
+        #            [pt for arc in self.arcs     for f in _get_faces(arc, **q) for pt in f] +
+        #            [pt for rec in self.recesses for f in _get_faces(rec, **q) for pt in f])
+        # if all_pts:
+        #     pts   = np.array(all_pts)
+        #     lo, hi = pts.min(0), pts.max(0)
+        #     mid   = (lo + hi) / 2
+        #     span  = max((hi - lo).max() * 0.65, 1.0)
+        #     for fn, m in zip([ax.set_xlim, ax.set_ylim, ax.set_zlim], mid):
+        #         fn(m - span, m + span)
 
         ax.set_xlabel('X (mm)'); ax.set_ylabel('Y (mm)'); ax.set_zlabel('Z (mm)')
         ax.set_box_aspect([1, 1, 1])

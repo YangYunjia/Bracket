@@ -903,7 +903,7 @@ def _polygon_recess_occ(rec, n_levels=16):
 
 def _shape_for_recess(rec):
     """Dispatch to the correct OCC recess builder."""
-    from sheet_metal.recess import StampedRecess, PolygonRecess
+    from sheet_metal.basics.recess import StampedRecess, PolygonRecess
     if isinstance(rec, StampedRecess):
         return _stamped_recess_occ(rec)
     elif isinstance(rec, PolygonRecess):

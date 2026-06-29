@@ -550,7 +550,7 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
     sys.path.insert(0, '/home/yang/Bracket')
-    from sheet_metal.primitives import FlatPanel
+    from sheet_metal.basics.panel import FlatPanel
 
     panel = FlatPanel([0,0,0], [1,0,0], [0,1,0], 120, 80, t=2.0)
 
