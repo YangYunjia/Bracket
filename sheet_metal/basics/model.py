@@ -97,6 +97,7 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
              else parent.N)
     bdir  = float(bend_dir) * N_src
     r_n   = inner_r + t / 2
+    print(parent.name, N_src, bdir, T_out)
 
     # Check for a curved parent edge (SplinePanel only).
     crv = parent.edge_curve(edge_idx) if hasattr(parent, 'edge_curve') else None
@@ -228,6 +229,7 @@ def extend_loft(parent, edge_idx, angle_deg, free_curve,
              if hasattr(parent, 'N_at_edge') else parent.N)
     bdir  = float(bend_dir) * N_src
     r_n   = inner_r + t / 2
+    print(parent.name, N_src, bdir, T_out)
 
     # Root edge of the child: straight line from p0_child to p1_child
     T_child = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)

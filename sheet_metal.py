@@ -211,6 +211,7 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
     alpha = np.radians(abs(angle_deg))
     bdir  = float(bend_dir) * parent.N
     r_n   = inner_r + t / 2
+    print(parent.name, parent.N, bdir, T_out)
 
     T_child     = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
     W_child     = edge_dir
