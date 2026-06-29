@@ -31,19 +31,24 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 # ── OCC imports ───────────────────────────────────────────────────────────────
-from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax3
+from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Vec, gp_Ax3
 from OCC.Core.GC import GC_MakeArcOfCircle
 from OCC.Core.Geom import Geom_CylindricalSurface, Geom_BSplineCurve
-from OCC.Core.TColgp import TColgp_Array1OfPnt
-from OCC.Core.TColStd import TColStd_Array1OfReal, TColStd_Array1OfInteger
+from OCC.Core.TColgp import (TColgp_Array1OfPnt, TColgp_HArray1OfPnt,
+                              TColgp_Array1OfVec)
+from OCC.Core.TColStd import (TColStd_Array1OfReal, TColStd_Array1OfInteger,
+                               TColStd_HArray1OfBoolean)
+from OCC.Core.GeomAPI import GeomAPI_Interpolate, GeomAPI_ProjectPointOnCurve
 from OCC.Core.BRep import BRep_Builder, BRep_Tool
 from OCC.Core.BRepBuilderAPI import (
     BRepBuilderAPI_MakeEdge,
     BRepBuilderAPI_MakeWire,
     BRepBuilderAPI_MakeFace,
     BRepBuilderAPI_MakePolygon,
+    BRepBuilderAPI_MakeVertex,
 )
-from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+from OCC.Core.BRepOffsetAPI import (BRepOffsetAPI_ThruSections,
+                                    BRepOffsetAPI_MakePipeShell)
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopAbs import TopAbs_FACE
@@ -53,7 +58,7 @@ from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
 from OCC.Core.IFSelect import IFSelect_RetDone
 
 from ..basics.model import SheetMetalModel
-from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel
+from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel
 from ..basics.bending import BendArc, PartialBendArc
 from ..basics.recess import _sample_profile
 
@@ -386,6 +391,96 @@ def _shape_for_loft_panel(panel):
     return _compound_from_face_lists(panel.faces())
 
 
+def _shape_for_pipe_panel(panel):
+    """OCC BRepOffsetAPI_MakePipeShell for a PipePanel.
+
+    Builds an interpolating B-spline spine through panel.spine_pts with
+    optional t_start / t_end tangent constraints, then sweeps the profiles
+    along the spine.  Falls back to ThruSections on any failure.
+    """
+    spine_pts = [np.asarray(p, float) for p in panel.spine_pts]
+    n_pts     = len(spine_pts)
+    if n_pts != len(panel.profiles) or n_pts < 2:
+        return _shape_for_loft_panel(panel)
+
+    try:
+        # ── 1. Build spine BSpline via GeomAPI_Interpolate ──────────────────
+        pts_arr = TColgp_HArray1OfPnt(1, n_pts)
+        for i, pt in enumerate(spine_pts):
+            pts_arr.SetValue(i + 1, _to_pnt(pt))
+
+        interp = GeomAPI_Interpolate(pts_arr, False, 1e-7)
+
+        if panel.t_start is not None or panel.t_end is not None:
+            tang_arr = TColgp_Array1OfVec(1, n_pts)
+            flag_arr = TColStd_HArray1OfBoolean(1, n_pts)
+            for i in range(n_pts):
+                flag_arr.SetValue(i + 1, False)
+                tang_arr.SetValue(i + 1, gp_Vec(0.0, 0.0, 0.0))   # placeholder
+            if panel.t_start is not None:
+                ts = panel.t_start
+                tang_arr.SetValue(1, gp_Vec(float(ts[0]), float(ts[1]), float(ts[2])))
+                flag_arr.SetValue(1, True)
+            if panel.t_end is not None:
+                te = panel.t_end
+                tang_arr.SetValue(n_pts,
+                                  gp_Vec(float(te[0]), float(te[1]), float(te[2])))
+                flag_arr.SetValue(n_pts, True)
+            interp.Load(tang_arr, flag_arr)
+
+        interp.Perform()
+        if not interp.IsDone():
+            return _shape_for_loft_panel(panel)
+
+        bspline = interp.Curve()
+
+        # ── 2. Project each spine waypoint onto the BSpline to get params ───
+        params = []
+        for pt in spine_pts:
+            proj = GeomAPI_ProjectPointOnCurve(_to_pnt(pt), bspline)
+            if proj.NbPoints() > 0:
+                params.append(proj.LowerDistanceParameter())
+            else:
+                frac = len(params) / (n_pts - 1) if n_pts > 1 else 0.0
+                p0_c, p1_c = bspline.FirstParameter(), bspline.LastParameter()
+                params.append(p0_c + frac * (p1_c - p0_c))
+        params.sort()
+
+        # ── 3. Build explicit OCC vertices at each parameter ────────────────
+        V = [BRepBuilderAPI_MakeVertex(bspline.Value(float(p))).Vertex()
+             for p in params]
+
+        # ── 4. Build compound wire spine (one sub-edge per segment) ─────────
+        wire_maker = BRepBuilderAPI_MakeWire()
+        for i in range(n_pts - 1):
+            edge = BRepBuilderAPI_MakeEdge(
+                bspline, V[i], V[i + 1], params[i], params[i + 1]).Edge()
+            wire_maker.Add(edge)
+        if not wire_maker.IsDone():
+            return _shape_for_loft_panel(panel)
+        spine_wire = wire_maker.Wire()
+
+        # ── 5. Build the pipe shell ──────────────────────────────────────────
+        pipe = BRepOffsetAPI_MakePipeShell(spine_wire)
+        for crv, vtx in zip(panel.profiles, V):
+            wire = _curve3d_to_occ_wire(crv)
+            if wire is None:
+                return _shape_for_loft_panel(panel)
+            # WithContact=False: profile stays in its world-space position.
+            # WithCorrection=False: no rotation to spine normal (profiles are
+            # already in the correct orientation).
+            pipe.Add(wire, vtx, False, False)
+
+        pipe.Build()
+        if pipe.IsDone():
+            return pipe.Shape()
+
+    except Exception:
+        pass
+
+    return _shape_for_loft_panel(panel)
+
+
 # ─── panel shape builder ──────────────────────────────────────────────────────
 
 def _shape_for_panel(panel):
@@ -396,6 +491,9 @@ def _shape_for_panel(panel):
     LoftPanel: ThruSections loft between Curve3D profiles.
     Falls back to mesh compound if construction fails.
     """
+
+    if isinstance(panel, PipePanel):
+        return _shape_for_pipe_panel(panel)
 
     if isinstance(panel, LoftPanel):
         return _shape_for_loft_panel(panel)
@@ -1007,15 +1105,15 @@ class OCC_BracketModel:
 
     def extend(self, parent, edge_idx, angle_deg, child_length,
                bend_dir=+1, start_frac=0.0, end_frac=1.0,
-               blend_r=None, taper='arc'):
+               blend_r=None, taper='arc', inner_r=None):
         return self._sm.extend(parent, edge_idx, angle_deg, child_length,
                                 bend_dir=bend_dir,
                                 start_frac=start_frac, end_frac=end_frac,
-                                blend_r=blend_r, taper=taper)
+                                blend_r=blend_r, taper=taper, inner_r=inner_r)
 
     def extend_loft(self, parent, edge_idx, angle_deg, free_curve,
                     bend_dir=+1, start_frac=0.0, end_frac=1.0,
-                    intermediate_curves=None, ruled=True):
+                    intermediate_curves=None, ruled=True, inner_r=None):
         """Extend a LoftPanel child from parent.
 
         free_curve : Curve3D or [(x,y,z),(x,y,z)] for the far edge
@@ -1024,7 +1122,24 @@ class OCC_BracketModel:
             parent, edge_idx, angle_deg, free_curve,
             bend_dir=bend_dir,
             start_frac=start_frac, end_frac=end_frac,
-            intermediate_curves=intermediate_curves, ruled=ruled)
+            intermediate_curves=intermediate_curves, ruled=ruled,
+            inner_r=inner_r)
+
+    def extend_pipe(self, parent, edge_idx, angle_deg, free_curve,
+                    bend_dir=+1, start_frac=0.0, end_frac=1.0,
+                    intermediate_curves=None, t_end=None, ruled=False,
+                    inner_r=None):
+        """Extend a PipePanel child from parent (tangent-controlled spine).
+
+        free_curve : Curve3D or [(x,y,z),(x,y,z)] for the far edge
+        t_end      : optional unit tangent override at the free edge
+        """
+        return self._sm.extend_pipe(
+            parent, edge_idx, angle_deg, free_curve,
+            bend_dir=bend_dir,
+            start_frac=start_frac, end_frac=end_frac,
+            intermediate_curves=intermediate_curves,
+            t_end=t_end, ruled=ruled, inner_r=inner_r)
 
     def add_recess(self, panel, cx, cy, width, height, corner_r,
                    r_top, r_bot, depth=None, wall_h=None,

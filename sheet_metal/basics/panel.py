@@ -566,3 +566,116 @@ class LoftPanel:
             return b0_r.copy(), b0_f.copy(), n(b0_f - b0_r), self.N_at_edge(3)
         raise IndexError(f'LoftPanel has 4 edges (0–3), got {i}.')
 
+
+# ── PipePanel ──────────────────────────────────────────────────────────────────
+
+class PipePanel:
+    """Panel swept along a spline spine with controlled start/end tangents.
+
+    Parallel to LoftPanel but rendered via BRepOffsetAPI_MakePipeShell in the
+    OCC backend, guaranteeing G1 continuity with adjacent BendArcs.
+
+    The spine is an interpolating B-spline through ``spine_pts`` (one per
+    profile).  If ``spine_pts`` is omitted it defaults to the midpoints of the
+    profile endpoints.  ``t_start`` / ``t_end`` are optional unit tangent
+    constraints at the first / last spine point.
+
+    Edge numbering: identical to LoftPanel (0=root, 1=free, 2/3=long sides).
+    """
+
+    def __init__(self, profiles, t_start=None, t_end=None,
+                 spine_pts=None, ruled=False, name='PP', t=2.0):
+        if len(profiles) < 2:
+            raise ValueError('PipePanel needs at least 2 profiles.')
+
+        def _coerce(p):
+            if isinstance(p, Curve3D):
+                return p
+            pts = np.asarray(p, float)
+            if pts.ndim == 1:
+                raise ValueError('Profile must be a Curve3D or list of 3-D points.')
+            if len(pts) == 2:
+                return Curve3D.line(pts[0], pts[1])
+            return Curve3D('polyline', _pts=pts)
+
+        self.profiles    = [_coerce(p) for p in profiles]
+        self.ruled       = bool(ruled)
+        self.name        = str(name)
+        self.t           = float(t)
+        self._edge_spans = {}
+
+        self.t_start = n(np.asarray(t_start, float)) if t_start is not None else None
+        self.t_end   = n(np.asarray(t_end,   float)) if t_end   is not None else None
+
+        if spine_pts is not None:
+            if len(spine_pts) != len(self.profiles):
+                raise ValueError('spine_pts must have the same count as profiles.')
+            self.spine_pts = [np.asarray(p, float) for p in spine_pts]
+        else:
+            self.spine_pts = [(a + b) / 2.0
+                              for a, b in [p.endpoints() for p in self.profiles]]
+
+    # ── normal helpers (identical to LoftPanel) ───────────────────────────────
+
+    def _edge_normal(self, profile_idx, long_side=0):
+        prof     = self.profiles[profile_idx]
+        t_ep     = 0.0 if long_side == 0 else 1.0
+        tang     = prof.tangent_at(t_ep)
+        a0, _    = self.profiles[0].endpoints()
+        a1, _    = self.profiles[-1].endpoints()
+        _, b0    = self.profiles[0].endpoints()
+        _, b1    = self.profiles[-1].endpoints()
+        long_dir = n(a1 - a0) if long_side == 0 else n(b1 - b0)
+        return n(np.cross(tang, long_dir))
+
+    def N_at_edge(self, edge_idx):
+        if edge_idx == 0:
+            return self._edge_normal(0,  long_side=0)
+        if edge_idx == 1:
+            return self._edge_normal(-1, long_side=0)
+        return self._edge_normal(len(self.profiles) // 2, long_side=(edge_idx - 2))
+
+    @property
+    def N(self):
+        return self.N_at_edge(0)
+
+    # ── child tracking ────────────────────────────────────────────────────────
+
+    def _register_child(self, edge_idx, start_frac=0.0, end_frac=1.0):
+        sf, ef = float(start_frac), float(end_frac)
+        spans  = self._edge_spans.setdefault(edge_idx, [])
+        for s, e in spans:
+            if sf < e - 1e-6 and ef > s + 1e-6:
+                raise ValueError(
+                    f'Child [{sf:.3g},{ef:.3g}] overlaps existing child '
+                    f'[{s:.3g},{e:.3g}] on PipePanel edge {edge_idx}.')
+        spans.append((sf, ef))
+
+    def _corner_blocked(self, corner_idx):
+        return False
+
+    # ── edge geometry (extend_panel / extend compatible) ─────────────────────
+
+    def edge(self, i):
+        """Return (p0, p1, edge_dir, outward_dir) for edge i.
+
+        At edge 1 (free profile) the outward direction uses ``t_end`` when it
+        is set, so the downstream BendArc is built tangentially consistent with
+        the constrained spine end.
+        """
+        a0_r, b0_r = self.profiles[0].endpoints()
+        a0_f, b0_f = self.profiles[-1].endpoints()
+
+        if i == 0:   # root profile
+            chord = n(b0_r - a0_r)
+            out   = n(np.cross(chord, self.N_at_edge(0)))
+            return a0_r.copy(), b0_r.copy(), chord, out
+        if i == 1:   # free profile
+            chord = n(b0_f - a0_f)
+            out   = self.t_end.copy() if self.t_end is not None else n(a0_f - a0_r)
+            return a0_f.copy(), b0_f.copy(), chord, out
+        if i == 2:
+            return a0_r.copy(), a0_f.copy(), n(a0_f - a0_r), self.N_at_edge(2)
+        if i == 3:
+            return b0_r.copy(), b0_f.copy(), n(b0_f - b0_r), self.N_at_edge(3)
+        raise IndexError(f'PipePanel has 4 edges (0–3), got {i}.')

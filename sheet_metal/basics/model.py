@@ -5,7 +5,7 @@ sheet_metal.model — SheetMetalModel builder and renderer.
 import numpy as np
 
 from .maths import n
-from .panel import FlatPanel, PolygonPanel, LoftPanel, Curve3D
+from .panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel, Curve3D
 from .bending import BendArc, PartialBendArc
 from .tree import PanelNode
 from .recess import StampedRecess, PolygonRecess
@@ -269,6 +269,106 @@ def extend_loft(parent, edge_idx, angle_deg, free_curve,
     return child, arc
 
 
+def extend_pipe(parent, edge_idx, angle_deg, free_curve,
+                inner_r=5.0, bend_dir=+1,
+                start_frac=0.0, end_frac=1.0,
+                intermediate_curves=None, t_end=None, ruled=False):
+    """Extend a PipePanel child from a parent panel edge.
+
+    Identical to extend_loft() but creates a PipePanel with a spline spine
+    whose start tangent is constrained to match the outgoing direction of the
+    connecting BendArc, ensuring G1 continuity at the root junction.
+
+    Parameters
+    ----------
+    parent             : any panel type
+    edge_idx           : edge on parent
+    angle_deg          : bend angle in degrees
+    free_curve         : Curve3D (or [(x,y,z),(x,y,z)]) for the far edge
+    inner_r            : inner bend radius
+    bend_dir           : +1 / -1
+    start_frac, end_frac: span along parent edge
+    intermediate_curves: optional list of Curve3D between root and free
+    t_end              : optional unit tangent to constrain the spine at the
+                         free edge.  Defaults to n(free_leading - root_leading).
+    ruled              : True → ruled loft; False → smooth (default)
+
+    Returns (PipePanel child, arc).
+    """
+    # ── Root edge geometry (same as extend_loft) ─────────────────────────────
+    p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
+    L_edge  = float(np.linalg.norm(p1_full - p0_full))
+    ed_unit = (p1_full - p0_full) / L_edge
+
+    if hasattr(parent, '_edge_flat_trims'):
+        ts, te = parent._edge_flat_trims(edge_idx)
+        if start_frac > 1e-6:
+            p0_full = p0_full + ts * ed_unit
+        if end_frac < 1.0 - 1e-6:
+            p1_full = p1_full - te * ed_unit
+        L_edge = float(np.linalg.norm(p1_full - p0_full))
+
+    p0 = p0_full + start_frac * (p1_full - p0_full)
+    p1 = p0_full + end_frac   * (p1_full - p0_full)
+
+    t     = parent.t
+    alpha = np.radians(abs(angle_deg))
+    N_src = (parent.N_at_edge(edge_idx)
+             if hasattr(parent, 'N_at_edge') else parent.N)
+    bdir  = float(bend_dir) * N_src
+    r_n   = inner_r + t / 2
+
+    # Outgoing tangent at the BendArc child edge — this becomes t_start
+    T_child = n(np.sin(alpha) * bdir + np.cos(alpha) * T_out)
+
+    C0           = p0 + r_n * bdir
+    child_origin = C0 + r_n * (-np.cos(alpha) * bdir + np.sin(alpha) * T_out)
+    C1           = p1 + r_n * bdir
+    child_far    = C1 + r_n * (-np.cos(alpha) * bdir + np.sin(alpha) * T_out)
+
+    root_curve = Curve3D.line(child_origin, child_far)
+
+    if not isinstance(free_curve, Curve3D):
+        pts = np.asarray(free_curve, float)
+        if pts.ndim == 2 and len(pts) == 2:
+            free_curve = Curve3D.line(pts[0], pts[1])
+        else:
+            free_curve = Curve3D('polyline', _pts=pts)
+
+    profiles = [root_curve]
+    if intermediate_curves:
+        profiles += list(intermediate_curves)
+    profiles.append(free_curve)
+
+    # Auto t_end: direction from root leading corner to free leading corner
+    if t_end is None:
+        a_root = root_curve.endpoints()[0]
+        a_free = free_curve.endpoints()[0]
+        t_end_val = n(a_free - a_root)
+    else:
+        t_end_val = n(np.asarray(t_end, float))
+
+    child = PipePanel(profiles=profiles, t_start=T_child, t_end=t_end_val,
+                      ruled=ruled, name=f'{parent.name}.e{edge_idx}', t=t)
+
+    is_partial = (start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)
+    if is_partial:
+        _br = r_n
+        arc = PartialBendArc(
+            p0_full=p0_full, p1_full=p1_full,
+            s_start=start_frac * L_edge,
+            s_end=end_frac     * L_edge,
+            T_out=T_out, N_bend=bdir,
+            alpha=alpha, r_n=r_n,
+            blend_r=_br,
+        )
+    else:
+        arc = BendArc(p0=p0, p1=p1, T_out=T_out, N_bend=bdir,
+                      alpha=alpha, r_n=r_n)
+
+    return child, arc
+
+
 class SheetMetalModel:
     """Incrementally built sheet-metal mid-surface model.
 
@@ -366,10 +466,11 @@ class SheetMetalModel:
 
     def extend(self, parent, edge_idx, angle_deg, child_length,
                bend_dir=+1, start_frac=0.0, end_frac=1.0,
-               blend_r=None, taper='arc'):
+               blend_r=None, taper='arc', inner_r=None):
         child, arc = extend_panel(
             parent, edge_idx, angle_deg, child_length,
-            inner_r=self.inner_r, bend_dir=bend_dir,
+            inner_r=self.inner_r if inner_r is None else inner_r,
+            bend_dir=bend_dir,
             start_frac=start_frac, end_frac=end_frac,
             blend_r=blend_r, taper=taper,
         )
@@ -385,7 +486,7 @@ class SheetMetalModel:
 
     def extend_loft(self, parent, edge_idx, angle_deg, free_curve,
                     bend_dir=+1, start_frac=0.0, end_frac=1.0,
-                    intermediate_curves=None, ruled=True):
+                    intermediate_curves=None, ruled=True, inner_r=None):
         """Extend a LoftPanel child from parent.
 
         Like extend() but creates a LoftPanel whose free edge is `free_curve`
@@ -401,14 +502,58 @@ class SheetMetalModel:
         start_frac, end_frac: span along parent edge
         intermediate_curves: optional list of Curve3D between root and free
         ruled              : True (default) or False for smooth loft
+        inner_r            : inner bend radius override (default: model inner_r)
 
         Returns (LoftPanel child, arc).
         """
         child, arc = extend_loft(
             parent, edge_idx, angle_deg, free_curve,
-            inner_r=self.inner_r, bend_dir=bend_dir,
+            inner_r=self.inner_r if inner_r is None else inner_r,
+            bend_dir=bend_dir,
             start_frac=start_frac, end_frac=end_frac,
             intermediate_curves=intermediate_curves, ruled=ruled,
+        )
+        parent._register_child(edge_idx, start_frac, end_frac)
+        parent_node = self._node_map[id(parent)]
+        child_node  = PanelNode(child, parent=parent_node, edge_idx=edge_idx,
+                                arc=arc, start_frac=start_frac, end_frac=end_frac)
+        parent_node.children.append(child_node)
+        self._node_map[id(child)] = child_node
+        self.panels.append(child)
+        self.arcs.append(arc)
+        return child, arc
+
+    def extend_pipe(self, parent, edge_idx, angle_deg, free_curve,
+                    bend_dir=+1, start_frac=0.0, end_frac=1.0,
+                    intermediate_curves=None, t_end=None, ruled=False,
+                    inner_r=None):
+        """Extend a PipePanel child from parent (tangent-controlled spine).
+
+        Like extend_loft() but creates a PipePanel whose spine is constrained
+        at both ends for G1 continuity with the connecting BendArcs.
+
+        Parameters
+        ----------
+        parent             : any panel type
+        edge_idx           : edge on parent
+        angle_deg          : bend angle in degrees
+        free_curve         : Curve3D or [(x,y,z),(x,y,z)] for the far edge
+        bend_dir           : +1 / -1
+        start_frac, end_frac: span along parent edge
+        intermediate_curves: optional list of Curve3D between root and free
+        t_end              : optional unit tangent override at the free edge
+        ruled              : True → ruled; False → smooth (default)
+        inner_r            : inner bend radius override
+
+        Returns (PipePanel child, arc).
+        """
+        child, arc = extend_pipe(
+            parent, edge_idx, angle_deg, free_curve,
+            inner_r=self.inner_r if inner_r is None else inner_r,
+            bend_dir=bend_dir,
+            start_frac=start_frac, end_frac=end_frac,
+            intermediate_curves=intermediate_curves,
+            t_end=t_end, ruled=ruled,
         )
         parent._register_child(edge_idx, start_frac, end_frac)
         parent_node = self._node_map[id(parent)]
