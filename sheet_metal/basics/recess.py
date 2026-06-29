@@ -12,7 +12,7 @@ With draft α:   depth = (r_top + r_bot)·(1 − sin α) + wall_h
 """
 
 import numpy as np
-from .primitives import _n
+from .maths import n
 
 
 # ── boundary helpers ──────────────────────────────────────────────────────────

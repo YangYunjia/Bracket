@@ -4,13 +4,13 @@ sheet_metal.model — SheetMetalModel builder and renderer.
 
 import numpy as np
 
-from .primitives import (_n, FlatPanel, BendArc, PartialBendArc, PolygonPanel,
-                         BSplineEdge, SplinePanel, CurvedBendArc,
-                         Curve3D, LoftPanel)
+from .maths import n
+from .panel import FlatPanel, PolygonPanel, LoftPanel, Curve3D
+from .bending import BendArc, PartialBendArc
 from .tree import PanelNode
 from .recess import StampedRecess, PolygonRecess
 
-
+'''
 def _arc_transform_curve(parent_crv, parent, alpha, r_n, bdir,
                          T_child, W_child, child_origin):
     """Return a BSplineEdge for the child's root edge (edge index 3).
@@ -34,7 +34,7 @@ def _arc_transform_curve(parent_crv, parent, alpha, r_n, bdir,
             tang = np.array([1.0, 0.0])
             tn   = 1.0
         tang      /= tn
-        T_out_i    = _n(tang[1]*parent.T - tang[0]*parent.W)
+        T_out_i    = n(tang[1]*parent.T - tang[0]*parent.W)
         C_i        = p_i + r_n * bdir
         q_i        = C_i + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_i)
         child_v.append(float(np.dot(q_i - child_origin, W_child)))
@@ -43,7 +43,7 @@ def _arc_transform_curve(parent_crv, parent, alpha, r_n, bdir,
     # The arc-transformed curve goes C0→C3 (v increases), so reverse it.
     child_cp = [[0.0, v] for v in reversed(child_v)]
     return BSplineEdge(child_cp, parent_crv.degree)
-
+'''
 
 def extend_panel(parent, edge_idx, angle_deg, child_length,
                  inner_r=5.0, bend_dir=+1,
@@ -98,6 +98,7 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
     # Check for a curved parent edge (SplinePanel only).
     crv = parent.edge_curve(edge_idx) if hasattr(parent, 'edge_curve') else None
 
+    '''
     if crv is not None and not ((start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)):
         # ── Curved full-edge path ──────────────────────────────────────────────
         # T_out at the start of the child's span from the curve tangent.
@@ -105,9 +106,9 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
         tn          = np.linalg.norm(tang_start)
         if tn > 1e-12:
             tang_start /= tn
-        T_out_start = _n(tang_start[1]*parent.T - tang_start[0]*parent.W)
+        T_out_start = n(tang_start[1]*parent.T - tang_start[0]*parent.W)
 
-        T_child = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out_start)
+        T_child = n(np.sin(alpha)*bdir + np.cos(alpha)*T_out_start)
         W_child = edge_dir   # chord direction — child is flat
 
         C0           = p0 + r_n * bdir
@@ -118,7 +119,7 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
         tn_e     = np.linalg.norm(tang_end)
         if tn_e > 1e-12:
             tang_end /= tn_e
-        T_out_end  = _n(tang_end[1]*parent.T - tang_end[0]*parent.W)
+        T_out_end  = n(tang_end[1]*parent.T - tang_end[0]*parent.W)
         C_end      = p1 + r_n * bdir
         q_end      = C_end + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_end)
         child_width = float(np.dot(q_end - child_origin, W_child))
@@ -142,9 +143,10 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
             N_bend=bdir, alpha=alpha, r_n=r_n,
         )
         return child, arc
+    '''
 
     # ── Straight-edge path (or partial curved — uses chord approximation) ──────
-    T_child     = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
+    T_child     = n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
     W_child     = edge_dir
     child_width = float(np.linalg.norm(p1 - p0))
 
@@ -226,7 +228,7 @@ def extend_loft(parent, edge_idx, angle_deg, free_curve,
     bdir  = float(bend_dir) * N_src
     r_n   = inner_r + t / 2
     # Root edge of the child: straight line from p0_child to p1_child
-    T_child = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
+    T_child = n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
     C0           = p0 + r_n * bdir
     child_origin = C0 + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out)
     C1           = p1 + r_n * bdir

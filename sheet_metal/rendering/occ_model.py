@@ -3,7 +3,7 @@ sheet_metal_occ.occ_model — pythonOCC backend with TRUE OCC B-Rep geometry.
 
 Every shape is an exact OCC B-Rep object (no mesh wrapping):
   FlatPanel / PolygonPanel → single planar OCC face (arc corners via GC_MakeArcOfCircle)
-  SplinePanel              → single planar OCC face (Geom_BSplineCurve for curved edges)
+#   SplinePanel              → single planar OCC face (Geom_BSplineCurve for curved edges)
   LoftPanel                → BRepOffsetAPI_ThruSections loft between Curve3D profiles.
                              Curve3D.line  → exact line-segment wire (BRepBuilderAPI_MakeEdge)
                              Curve3D.arc   → exact arc wire (GC_MakeArcOfCircle)
@@ -16,7 +16,7 @@ Every shape is an exact OCC B-Rep object (no mesh wrapping):
     'cyl'            — exact Geom_CylindricalSurface.  Aligned, equal-length, straight
                         edges only.
   PartialBendArc           → BRepOffsetAPI_ThruSections ruled loft (line-segment profiles)
-  CurvedBendArc            → arc-guided ThruSections loft (uses _build_grid child edge)
+#   CurvedBendArc            → arc-guided ThruSections loft (uses _build_grid child edge)
   StampedRecess            → BRepOffsetAPI_ThruSections loft (rounded-rect at each depth level)
                              + BRepBuilderAPI_MakeFace flat bottom
   PolygonRecess            → BRepOffsetAPI_ThruSections loft (offset polygon at each depth level)
@@ -53,7 +53,8 @@ from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
 from OCC.Core.IFSelect import IFSelect_RetDone
 
 from ..basics.model import SheetMetalModel
-from ..basics.primitives import BendArc, PartialBendArc, CurvedBendArc, Curve3D, LoftPanel
+from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel
+from ..basics.bending import BendArc, PartialBendArc
 from ..basics.recess import _sample_profile
 
 
@@ -395,7 +396,6 @@ def _shape_for_panel(panel):
     LoftPanel: ThruSections loft between Curve3D profiles.
     Falls back to mesh compound if construction fails.
     """
-    from sheet_metal.primitives import FlatPanel, PolygonPanel, SplinePanel
 
     if isinstance(panel, LoftPanel):
         return _shape_for_loft_panel(panel)
@@ -416,8 +416,8 @@ def _shape_for_panel(panel):
         W        = np.asarray(panel.W, float)
 
         edge_curves = None
-        if isinstance(panel, SplinePanel):
-            edge_curves = [panel.edge_curve(i) for i in range(n)]
+        # if isinstance(panel, SplinePanel):
+        #     edge_curves = [panel.edge_curve(i) for i in range(n)]
 
         wire = _polygon_wire_occ(verts_2d, corner_r, blocked, origin, T, W,
                                   edge_curves)
@@ -607,7 +607,7 @@ def _partial_arc_occ(arc, n_alpha=24):
 
     return _compound_from_face_lists(arc.faces())
 
-
+'''
 def _curved_bend_arc_occ(arc, n_arc=24):
     """Arc-guided loft for CurvedBendArc.
 
@@ -669,7 +669,7 @@ def _curved_bend_arc_occ(arc, n_arc=24):
         pass
 
     return _compound_from_face_lists(arc.faces())
-
+'''
 
 def _shape_for_arc(arc, backend='loft'):
     """Dispatch to the correct OCC arc builder.
@@ -682,8 +682,8 @@ def _shape_for_arc(arc, backend='loft'):
     if isinstance(arc, PartialBendArc):
         return _partial_arc_occ(arc)
 
-    if isinstance(arc, CurvedBendArc):
-        return _curved_bend_arc_occ(arc)
+    # if isinstance(arc, CurvedBendArc):
+    #     return _curved_bend_arc_occ(arc)
 
     if isinstance(arc, BendArc):
         if backend == 'cyl':
