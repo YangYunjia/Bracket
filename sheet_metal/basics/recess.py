@@ -181,8 +181,7 @@ class StampedRecess:
 
     def __init__(self, panel, cx, cy, width, height, corner_r,
                  r_top, r_bot, depth=None, wall_h=None,
-                 draft_angle=0.0,
-                 n_boundary=80, n_profile=20):
+                 draft_angle=0.0):
 
         if r_top <= 0 or r_bot <= 0:
             raise ValueError('r_top and r_bot must be positive.')
@@ -253,21 +252,19 @@ class StampedRecess:
         self.wall_h      = float(wall_h)
         self.depth       = float(depth)
         self.draft_angle = α                 # stored as radians internally
-        self.n_boundary  = int(n_boundary)
-        self.n_profile   = int(n_profile)
 
-    def faces(self):
+    def faces(self, n_boundary=80, n_profile=20):
         p     = self.panel
         T, W_ = p.T, p.W
         Np    = p.N                                  # panel outward normal
         C3    = p.origin + self.cx*T + self.cy*W_   # recess centre in 3D
 
         bpts, bnorms = _sample_boundary(
-            self.half_a, self.half_b, self.corner_r, self.n_boundary)
+            self.half_a, self.half_b, self.corner_r, n_boundary)
         us, vs = _sample_profile(
-            self.r_top, self.wall_h, self.r_bot, self.draft_angle, self.n_profile)
+            self.r_top, self.wall_h, self.r_bot, self.draft_angle, n_profile)
 
-        NB, NP = self.n_boundary, self.n_profile
+        NB, NP = n_boundary, n_profile
 
         # 3-D grid: (NB+1) rows (boundary) × (NP+1) cols (profile)
         # S = boundary_pt + u * inward_normal_3d + v * Np
@@ -436,8 +433,7 @@ class PolygonRecess:
 
     def __init__(self, panel, polygon, corner_r=0.0,
                  r_top=3.0, r_bot=3.0, depth=None, wall_h=None,
-                 draft_angle=0.0,
-                 n_boundary=80, n_profile=20):
+                 draft_angle=0.0):
 
         if r_top <= 0 or r_bot <= 0:
             raise ValueError('r_top and r_bot must be positive.')
@@ -471,10 +467,8 @@ class PolygonRecess:
         self.wall_h      = float(wall_h)
         self.depth       = float(depth)
         self.draft_angle = α
-        self.n_boundary  = int(n_boundary)
-        self.n_profile   = int(n_profile)
 
-    def faces(self):
+    def faces(self, n_boundary=80, n_profile=20):
         p      = self.panel
         T, W_  = p.T, p.W
         Np     = p.N
@@ -484,10 +478,10 @@ class PolygonRecess:
         C3     = p.origin + cen_uv[0]*T + cen_uv[1]*W_
 
         segs           = _polygon_boundary_segments(self.polygon, self.corner_r)
-        bpts, bnorms   = _sample_segs(segs, self.n_boundary)
+        bpts, bnorms   = _sample_segs(segs, n_boundary)
         us, vs         = _sample_profile(self.r_top, self.wall_h, self.r_bot,
-                                         self.draft_angle, self.n_profile)
-        NB, NP = self.n_boundary, self.n_profile
+                                         self.draft_angle, n_profile)
+        NB, NP = n_boundary, n_profile
 
         # 3-D sweep grid: boundary point + u * inward_normal_3d + v * panel_normal
         grid = np.empty((NB+1, NP+1, 3))

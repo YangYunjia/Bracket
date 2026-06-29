@@ -3,8 +3,6 @@ sheet_metal.model — SheetMetalModel builder and renderer.
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .primitives import (_n, FlatPanel, BendArc, PartialBendArc, PolygonPanel,
                          BSplineEdge, SplinePanel, CurvedBendArc,
@@ -97,8 +95,6 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
              else parent.N)
     bdir  = float(bend_dir) * N_src
     r_n   = inner_r + t / 2
-    print(parent.name, N_src, bdir, T_out)
-
     # Check for a curved parent edge (SplinePanel only).
     crv = parent.edge_curve(edge_idx) if hasattr(parent, 'edge_curve') else None
 
@@ -229,8 +225,6 @@ def extend_loft(parent, edge_idx, angle_deg, free_curve,
              if hasattr(parent, 'N_at_edge') else parent.N)
     bdir  = float(bend_dir) * N_src
     r_n   = inner_r + t / 2
-    print(parent.name, N_src, bdir, T_out)
-
     # Root edge of the child: straight line from p0_child to p1_child
     T_child = _n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
     C0           = p0 + r_n * bdir
@@ -426,8 +420,7 @@ class SheetMetalModel:
 
     def add_recess(self, panel, cx, cy, width, height, corner_r,
                    r_top, r_bot, depth=None, wall_h=None,
-                   draft_angle=0.0,
-                   n_boundary=80, n_profile=20):
+                   draft_angle=0.0):
         """Stamp a drawn recess onto an existing panel.
 
         cx, cy      : centre of recess in panel local coords (from panel.origin,
@@ -445,15 +438,13 @@ class SheetMetalModel:
         """
         rec = StampedRecess(panel, cx, cy, width, height, corner_r,
                             r_top, r_bot, depth=depth, wall_h=wall_h,
-                            draft_angle=draft_angle,
-                            n_boundary=n_boundary, n_profile=n_profile)
+                            draft_angle=draft_angle)
         self.recesses.append(rec)
         return rec
 
     def add_polygon_recess(self, panel, polygon, corner_r=0.0,
                            r_top=3.0, r_bot=3.0, depth=None, wall_h=None,
-                           draft_angle=0.0,
-                           n_boundary=80, n_profile=20):
+                           draft_angle=0.0):
         """Stamp a drawn recess with a polygon footprint onto a panel.
 
         panel       : the host FlatPanel or PolygonPanel
@@ -470,8 +461,7 @@ class SheetMetalModel:
         rec = PolygonRecess(panel, polygon, corner_r=corner_r,
                             r_top=r_top, r_bot=r_bot,
                             depth=depth, wall_h=wall_h,
-                            draft_angle=draft_angle,
-                            n_boundary=n_boundary, n_profile=n_profile)
+                            draft_angle=draft_angle)
         self.recesses.append(rec)
         return rec
 
@@ -489,52 +479,3 @@ class SheetMetalModel:
         self._holes.append({'centre': centre, 'normal': panel.N,
                             'label': label, 'r': r_vis})
 
-    def render(self, ax=None, color_panel='#4a90c4', color_bend='#2e6ea6',
-               color_recess='#3a7abf',
-               alpha_surf=0.85, ec='#1a3a52', lw=0.4, elev=28., azim=-50.):
-        if ax is None:
-            fig = plt.figure(figsize=(10, 8))
-            ax  = fig.add_subplot(111, projection='3d')
-
-        for p in self.panels:
-            ax.add_collection3d(Poly3DCollection(
-                p.faces(), alpha=alpha_surf,
-                facecolor=color_panel, edgecolor=ec, linewidth=lw))
-
-        for arc in self.arcs:
-            ax.add_collection3d(Poly3DCollection(
-                arc.faces(), alpha=alpha_surf,
-                facecolor=color_bend, edgecolor=ec, linewidth=lw))
-
-        for rec in self.recesses:
-            ax.add_collection3d(Poly3DCollection(
-                rec.faces(), alpha=alpha_surf,
-                facecolor=color_recess, edgecolor=ec, linewidth=lw))
-
-        hole_colors = ['#d62728', '#2ca02c', '#9467bd', '#ff7f0e']
-        for i, h in enumerate(self._holes):
-            c, ctr, n, r = hole_colors[i % 4], h['centre'], h['normal'], h['r']
-            ref = np.array([0, 1, 0]) if abs(n[1]) < 0.85 else np.array([1, 0, 0])
-            u_ = _n(np.cross(n, ref))
-            v_ = _n(np.cross(n, u_))
-            ang  = np.linspace(0, 2*np.pi, 48)
-            ring = ctr + r*(np.outer(np.cos(ang), u_) + np.outer(np.sin(ang), v_))
-            ax.plot(ring[:,0], ring[:,1], ring[:,2], color=c, lw=2.2, zorder=10)
-            ax.quiver(*ctr, *(n*r*1.5), color=c, lw=1.8,
-                      arrow_length_ratio=0.35, zorder=10)
-            ax.text(*(ctr + n*r*2.5), h['label'],
-                    fontsize=10, color=c, fontweight='bold')
-
-        pts = ([pt for p   in self.panels   for f in p.faces()   for pt in f] +
-               [pt for arc in self.arcs    for f in arc.faces() for pt in f] +
-               [pt for rec in self.recesses for f in rec.faces() for pt in f])
-        pts = np.array(pts)
-        lo, hi = pts.min(0), pts.max(0)
-        mid    = (lo + hi) / 2
-        span   = (hi - lo).max() * 0.65
-        for fn, m in zip([ax.set_xlim, ax.set_ylim, ax.set_zlim], mid):
-            fn(m - span, m + span)
-        ax.set_xlabel('X (mm)'); ax.set_ylabel('Y (mm)'); ax.set_zlabel('Z (mm)')
-        ax.set_box_aspect([1, 1, 1])
-        ax.view_init(elev=elev, azim=azim)
-        return ax

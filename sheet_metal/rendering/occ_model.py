@@ -25,7 +25,7 @@ Every shape is an exact OCC B-Rep object (no mesh wrapping):
 STEP export produces compact, exact B-Rep files.
 """
 
-import os, sys
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
@@ -52,14 +52,9 @@ from OCC.Core.TopoDS import TopoDS_Compound, topods
 from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
 from OCC.Core.IFSelect import IFSelect_RetDone
 
-# ── existing sheet_metal package ─────────────────────────────────────────────
-_HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
-
-from sheet_metal import SheetMetalModel
-from sheet_metal.primitives import BendArc, PartialBendArc, CurvedBendArc, Curve3D, LoftPanel
-from sheet_metal.recess import _sample_profile
+from ..basics.model import SheetMetalModel
+from ..basics.primitives import BendArc, PartialBendArc, CurvedBendArc, Curve3D, LoftPanel
+from ..basics.recess import _sample_profile
 
 
 # ─── geometry helpers ─────────────────────────────────────────────────────────
@@ -1033,21 +1028,18 @@ class OCC_BracketModel:
 
     def add_recess(self, panel, cx, cy, width, height, corner_r,
                    r_top, r_bot, depth=None, wall_h=None,
-                   draft_angle=0.0, n_boundary=80, n_profile=20):
+                   draft_angle=0.0):
         return self._sm.add_recess(panel, cx, cy, width, height, corner_r,
                                     r_top, r_bot, depth=depth, wall_h=wall_h,
-                                    draft_angle=draft_angle,
-                                    n_boundary=n_boundary, n_profile=n_profile)
+                                    draft_angle=draft_angle)
 
     def add_polygon_recess(self, panel, polygon, corner_r=0.0,
                             r_top=3.0, r_bot=3.0, depth=None, wall_h=None,
-                            draft_angle=0.0, n_boundary=80, n_profile=20):
+                            draft_angle=0.0):
         return self._sm.add_polygon_recess(panel, polygon, corner_r=corner_r,
                                             r_top=r_top, r_bot=r_bot,
                                             depth=depth, wall_h=wall_h,
-                                            draft_angle=draft_angle,
-                                            n_boundary=n_boundary,
-                                            n_profile=n_profile)
+                                            draft_angle=draft_angle)
 
     def mark_hole(self, panel, u, v, label='F', r_vis=5.0):
         self._sm.mark_hole(panel, u, v, label=label, r_vis=r_vis)

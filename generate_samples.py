@@ -11,7 +11,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import math
-from sheet_metal import SheetMetalModel, BSplineEdge, SplinePanel
+from sheet_metal import BSplineEdge, SplinePanel
+from sheet_metal.rendering.numpy_model import NumpyBracketModel as SheetMetalModel
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output')
 os.makedirs(OUT, exist_ok=True)

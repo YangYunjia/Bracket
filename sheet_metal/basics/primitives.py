@@ -307,25 +307,24 @@ class FlatPanel:
 class BendArc:
     """Full-edge cylindrical arc (mid-surface strip)."""
 
-    def __init__(self, p0, p1, T_out, N_bend, alpha, r_n, n_arc=28):
+    def __init__(self, p0, p1, T_out, N_bend, alpha, r_n):
         self.p0     = np.asarray(p0, float)
         self.p1     = np.asarray(p1, float)
         self.T_out  = _n(T_out)
         self.N_bend = _n(N_bend)
         self.alpha  = float(alpha)
         self.r_n    = float(r_n)
-        self.n_arc  = int(n_arc)
 
     def _pt(self, s, a):
         p_edge = (1-s)*self.p0 + s*self.p1
         C      = p_edge + self.r_n * self.N_bend
         return C + self.r_n * (-np.cos(a)*self.N_bend + np.sin(a)*self.T_out)
 
-    def faces(self):
-        alphas = np.linspace(0, self.alpha, self.n_arc+1)
+    def faces(self, n_arc=28):
+        alphas = np.linspace(0, self.alpha, n_arc+1)
         return [[self._pt(0, alphas[i]),  self._pt(1, alphas[i]),
                  self._pt(1, alphas[i+1]), self._pt(0, alphas[i+1])]
-                for i in range(self.n_arc)]
+                for i in range(n_arc)]
 
 
 # ── PartialBendArc ────────────────────────────────────────────────────────────
@@ -355,7 +354,7 @@ class PartialBendArc:
                  s_start, s_end,
                  T_out, N_bend,
                  alpha, r_n,
-                 blend_r=None, taper='arc', n_arc=32, n_blend=16):
+                 blend_r=None, taper='arc'):
         self.p0     = np.asarray(p0_full, float)
         self.p1     = np.asarray(p1_full, float)
         self.L      = float(np.linalg.norm(self.p1 - self.p0))
@@ -367,8 +366,6 @@ class PartialBendArc:
         self.r_n    = float(r_n)
         self.blend  = float(blend_r) if blend_r is not None else float(r_n)
         self.taper  = taper
-        self.n_arc  = int(n_arc)
-        self.n_bld  = int(n_blend)
 
     def _edge_pt(self, s):
         frac = np.clip(s / self.L, 0.0, 1.0)
@@ -386,19 +383,17 @@ class PartialBendArc:
             scale = 1.0 - np.sqrt(max(0.0, t * (2 - t)))
         return self.blend * scale
 
-    def faces(self):
-        na = self.n_arc
-        ns = self.n_bld
-        a_vals = np.linspace(0.0, self.alpha, na + 1)
+    def faces(self, n_arc=32, n_blend=16):
+        a_vals = np.linspace(0.0, self.alpha, n_arc + 1)
         grid = []
         for a in a_vals:
             ext  = self._ext(a)
             s_lo = max(0.0,    self.s0 - ext)
             s_hi = min(self.L, self.s1 + ext)
             grid.append([self._pt(s, a)
-                         for s in np.linspace(s_lo, s_hi, ns + 1)])
+                         for s in np.linspace(s_lo, s_hi, n_blend + 1)])
         return [[grid[i][j], grid[i][j+1], grid[i+1][j+1], grid[i+1][j]]
-                for i in range(na) for j in range(ns)]
+                for i in range(n_arc) for j in range(n_blend)]
 
 
 # ── PolygonPanel ──────────────────────────────────────────────────────────────
@@ -1125,7 +1120,7 @@ class LoftPanel:
     when child panels are grown from this LoftPanel.
     """
 
-    def __init__(self, profiles, ruled=True, name='LP', t=2.0, n_sample=32):
+    def __init__(self, profiles, ruled=True, name='LP', t=2.0):
         """
         Parameters
         ----------
@@ -1134,7 +1129,6 @@ class LoftPanel:
         ruled    : bool — ruled (True) or smooth (False) loft
         name     : label string
         t        : sheet thickness
-        n_sample : tessellation resolution for numpy mesh fallback
         """
         if len(profiles) < 2:
             raise ValueError('LoftPanel needs at least 2 profiles.')
@@ -1154,7 +1148,6 @@ class LoftPanel:
         self.ruled     = bool(ruled)
         self.name      = str(name)
         self.t         = float(t)
-        self.n_sample  = int(n_sample)
         self._edge_spans = {}   # same child-tracking interface as FlatPanel
 
     # ── normal helpers ────────────────────────────────────────────────────────
@@ -1226,9 +1219,9 @@ class LoftPanel:
             long  = _n(a0_r - a0_f)   # pointing away from free end
             out   = _n(np.cross(chord, self.N_at_edge(0)))
             return a0_r.copy(), b0_r.copy(), chord, out
-        if i == 1:   # free profile
+        if i == 1:   # free profile — outward dir points away from root
             chord = _n(b0_f - a0_f)
-            out   = _n(np.cross(chord, self.N_at_edge(1)))
+            out   = _n(a0_f - a0_r)
             return a0_f.copy(), b0_f.copy(), chord, out
         if i == 2:   # first long edge (t=0 side)
             return a0_r.copy(), a0_f.copy(), _n(a0_f - a0_r), self.N_at_edge(2)
@@ -1236,30 +1229,30 @@ class LoftPanel:
             return b0_r.copy(), b0_f.copy(), _n(b0_f - b0_r), self.N_at_edge(3)
         raise IndexError(f'LoftPanel has 4 edges (0–3), got {i}.')
 
-    # ── tessellation (numpy mesh fallback) ────────────────────────────────────
+    # ── tessellation (numpy mesh) ─────────────────────────────────────────────
 
-    def _sample_profiles(self):
+    def _sample_profiles(self, n_sample=32):
         """Sample all profiles at n_sample points each.
 
         Returns list of (n_sample, 3) arrays, one per profile.
         """
-        return [p.sample(self.n_sample) if p._kind != 'polyline'
+        return [p.sample(n_sample) if p._kind != 'polyline'
                 else p._pts
                 for p in self.profiles]
 
-    def faces(self):
+    def faces(self, n_sample=32):
         """Quad tessellation of the loft surface.
 
         For 2 profiles: directly interpolates between them.
         For N>2 profiles: interpolates between consecutive profile pairs.
         """
-        sampled = self._sample_profiles()
-        n   = self.n_sample
+        sampled = self._sample_profiles(n_sample)
         quads = []
 
         for k in range(len(sampled) - 1):
             A = sampled[k]      # (n, 3) current profile
             B = sampled[k + 1]  # (n, 3) next profile
+            n = n_sample
             # Ensure same count by resampling if needed (polyline case)
             if len(A) != n:
                 ts = np.linspace(0.0, 1.0, n)
