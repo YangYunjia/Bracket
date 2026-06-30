@@ -32,7 +32,7 @@ import numpy as np
 from ..basics.maths import n
 from .basics import BaseRenderer
 from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel
-from ..basics.bending import BendArc, PartialBendArc
+from ..basics.bending import PartialBendArc
 from ..basics.recess import StampedRecess, PolygonRecess, _sample_profile
 
 # ── OCC imports ───────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ def _compound_from_face_lists(faces_list):
 
 # ─── polygon wire builder ─────────────────────────────────────────────────────
 
-def _flat_panel_wire_occ(verts_2d, corner_r, blocked, origin, T, W):
+def _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W):
     """Build an exact closed OCC wire for a 2-D flat panel.
 
     Corners between straight edges are rounded with GC_MakeArcOfCircle. 
@@ -128,12 +128,16 @@ def _flat_panel_wire_occ(verts_2d, corner_r, blocked, origin, T, W):
     Parameters
     ----------
     verts_2d    : (N, 2) CCW polygon vertices in panel local (u, v) frame
-    corner_r    : rounding radius (0 = all sharp)
-    blocked     : set of vertex indices that must stay sharp
+    corner_trim : (N,) trim length along each adjacent edge at every vertex
+                  (0 = sharp corner; final values come from panel.corner_trim)
     origin, T, W: 3-D panel frame  (3-D point = origin + u*T + v*W)
     """
-    verts_2d = np.asarray(verts_2d, float)
-    n        = len(verts_2d)
+    verts_2d    = np.asarray(verts_2d, float)
+    corner_trim = np.asarray(corner_trim, float)
+    n_edges     = len(verts_2d)
+    if len(corner_trim) != n_edges:
+        raise ValueError(
+            f'corner_trim length {len(corner_trim)} != n_edges {n_edges}')
     origin   = np.asarray(origin, float)
     T        = np.asarray(T, float)
     W        = np.asarray(W, float)
@@ -143,61 +147,62 @@ def _flat_panel_wire_occ(verts_2d, corner_r, blocked, origin, T, W):
         return origin + float(uv[0]) * T + float(uv[1]) * W
 
     # ── Precompute arc geometry at each vertex ────────────────────────────────
-    # Arc is inserted only where BOTH adjacent edges are straight (not B-spline)
-    # and the corner is convex and not blocked.
-    arcs = [None] * n   # (P_start_3d, P_mid_3d, P_end_3d) or None
+    # Arc is inserted only on convex corners with corner_trim[i] > 0.
+    arcs = [None] * n_edges   # (P_start_3d, P_mid_3d, P_end_3d) or None
 
-    if corner_r > 1e-12:
-        for i in range(n):
-            if i in blocked:
-                continue
+    for i in range(n_edges):
+        trim = float(corner_trim[i])
+        if trim <= 0.0:
+            continue
 
-            v      = verts_2d[i]
-            v_prev = verts_2d[(i - 1) % n]
-            v_next = verts_2d[(i + 1) % n]
+        v      = verts_2d[i]
+        v_prev = verts_2d[(i - 1) % n_edges]
+        v_next = verts_2d[(i + 1) % n_edges]
 
-            e_in  = v - v_prev
-            e_out = v_next - v
-            l_in  = np.linalg.norm(e_in)
-            l_out = np.linalg.norm(e_out)
-            if l_in < 1e-9 or l_out < 1e-9:
-                continue
-            d_in  = e_in / l_in
-            d_out = e_out / l_out
+        e_in  = v - v_prev
+        e_out = v_next - v
+        l_in  = np.linalg.norm(e_in)
+        l_out = np.linalg.norm(e_out)
+        if l_in < 1e-9 or l_out < 1e-9:
+            continue
+        d_in  = e_in / l_in
+        d_out = e_out / l_out
 
-            cross = d_in[0] * d_out[1] - d_in[1] * d_out[0]
-            if cross < 1e-6:
-                continue   # concave or collinear
+        cross = d_in[0] * d_out[1] - d_in[1] * d_out[0]
+        if cross < 1e-6:
+            continue   # concave or collinear
 
-            cos_a = np.clip(np.dot(d_in, d_out), -1.0, 1.0)
-            sin_h = np.sqrt(max(0.0, (1 - cos_a) / 2))
-            cos_h = np.sqrt(max(0.0, (1 + cos_a) / 2))
-            if cos_h < 1e-9:
-                continue
+        cos_a = np.clip(np.dot(d_in, d_out), -1.0, 1.0)
+        sin_h = np.sqrt(max(0.0, (1 - cos_a) / 2))
+        cos_h = np.sqrt(max(0.0, (1 + cos_a) / 2))
+        if sin_h < 1e-9:
+            continue
 
-            trim = corner_r * sin_h / cos_h
-            # Guard: trim must not exceed half the edge length
-            if trim > l_in / 2 - 1e-6 or trim > l_out / 2 - 1e-6:
-                continue
+        # Recover fillet radius from trim (inverse of trim = R * sin_h / cos_h).
+        R = trim * cos_h / sin_h
 
-            arc_start_2d = v - trim * d_in
-            arc_end_2d   = v + trim * d_out
+        # Guard: trim must not exceed half the adjacent edge length.
+        if trim > l_in / 2 - 1e-6 or trim > l_out / 2 - 1e-6:
+            continue
 
-            # Arc centre: rotate d_in by +90° (CCW) → inward perpendicular
-            perp_in = np.array([-d_in[1], d_in[0]])
-            C_2d    = arc_start_2d + corner_r * perp_in
+        arc_start_2d = v - trim * d_in
+        arc_end_2d   = v + trim * d_out
 
-            # Arc midpoint = C + r * normalise(v_start + v_end from C)
-            vs_ = arc_start_2d - C_2d
-            ve_ = arc_end_2d   - C_2d
-            vm_ = vs_ + ve_
-            vm_len = np.linalg.norm(vm_)
-            if vm_len > 1e-9:
-                arc_mid_2d = C_2d + corner_r * vm_ / vm_len
-            else:
-                arc_mid_2d = (arc_start_2d + arc_end_2d) / 2
+        # Arc centre: rotate d_in by +90° (CCW) → inward perpendicular.
+        perp_in = np.array([-d_in[1], d_in[0]])
+        C_2d    = arc_start_2d + R * perp_in
 
-            arcs[i] = (to_3d(arc_start_2d), to_3d(arc_mid_2d), to_3d(arc_end_2d))
+        # Arc midpoint = C + R * normalise(v_start + v_end from C).
+        vs_ = arc_start_2d - C_2d
+        ve_ = arc_end_2d   - C_2d
+        vm_ = vs_ + ve_
+        vm_len = np.linalg.norm(vm_)
+        if vm_len > 1e-9:
+            arc_mid_2d = C_2d + R * vm_ / vm_len
+        else:
+            arc_mid_2d = (arc_start_2d + arc_end_2d) / 2
+
+        arcs[i] = (to_3d(arc_start_2d), to_3d(arc_mid_2d), to_3d(arc_end_2d))
 
     # ── Build OCC edges in CCW order ──────────────────────────────────────────
     # For each edge i → j:
@@ -205,8 +210,8 @@ def _flat_panel_wire_occ(verts_2d, corner_r, blocked, origin, T, W):
     #   - If straight: add line segment, then arc at vertex j
     edges = []
 
-    for i in range(n):
-        j     = (i + 1) % n
+    for i in range(n_edges):
+        j     = (i + 1) % n_edges
 
         seg_start = arcs[i][2] if arcs[i] is not None else to_3d(verts_2d[i])
         seg_end   = arcs[j][0] if arcs[j] is not None else to_3d(verts_2d[j])
@@ -437,26 +442,26 @@ def _pipe_panel_occ(panel: PipePanel):
 # Assumes both edges are parallel, equal-length, and straight.  Exact for
 # aligned BendArc; incorrect for partial-span, non-parallel, or curved edges.
 
-def _bend_arc_cyl_occ(arc: BendArc):
-    """Exact Geom_CylindricalSurface face for an aligned straight BendArc."""
-    p0     = np.asarray(arc.p0, float)
-    p1     = np.asarray(arc.p1, float)
-    N_bend = n(np.asarray(arc.N_bend, float))
-    alpha  = float(arc.alpha)
-    r_n    = float(arc.r_n)
+# def _bend_arc_cyl_occ(arc: BendArc):
+#     """Exact Geom_CylindricalSurface face for an aligned straight BendArc."""
+#     p0     = np.asarray(arc.p0, float)
+#     p1     = np.asarray(arc.p1, float)
+#     N_bend = n(np.asarray(arc.N_bend, float))
+#     alpha  = float(arc.alpha)
+#     r_n    = float(arc.r_n)
 
-    L = float(np.linalg.norm(p1 - p0))
-    if L < 1e-12 or abs(alpha) < 1e-9:
-        raise ValueError('BendArc is too short or has no angle')
+#     L = float(np.linalg.norm(p1 - p0))
+#     if L < 1e-12 or abs(alpha) < 1e-9:
+#         raise ValueError('BendArc is too short or has no angle')
 
-    edge_dir = (p1 - p0) / L
-    C0  = p0 + r_n * N_bend
-    ax3 = gp_Ax3(_to_pnt(C0), _to_dir(edge_dir), _to_dir(-N_bend))
-    cyl = Geom_CylindricalSurface(ax3, r_n)
+#     edge_dir = (p1 - p0) / L
+#     C0  = p0 + r_n * N_bend
+#     ax3 = gp_Ax3(_to_pnt(C0), _to_dir(edge_dir), _to_dir(-N_bend))
+#     cyl = Geom_CylindricalSurface(ax3, r_n)
 
-    maker = BRepBuilderAPI_MakeFace(cyl, -alpha, 0.0, 0.0, L, 1e-6)
-    if not maker.IsDone(): raise ValueError('MakeFace failed')
-    return maker.Face()
+#     maker = BRepBuilderAPI_MakeFace(cyl, -alpha, 0.0, 0.0, L, 1e-6)
+#     if not maker.IsDone(): raise ValueError('MakeFace failed')
+#     return maker.Face()
 
 
 # ── Backend B: arc-guided ThruSections loft ───────────────────────────────────
@@ -475,103 +480,92 @@ def _bend_arc_cyl_occ(arc: BendArc):
 # For an aligned straight BendArc all T_out_j are identical to arc.T_out
 # and the loft reduces to the cylindrical surface (within tessellation error).
 
-def _arc_loft_occ(parent_pts, child_pts, N_bend, alpha, r_n, n_arc=24):
-    """Arc-guided ThruSections loft between sampled parent and child edges.
+# def _bend_arc_loft_occ(arc: BendArc, n_arc=24):
+#     """Arc-guided loft for BendArc (straight, possibly partial-span)."""
+#     p0    = np.asarray(arc.p0, float)
+#     p1    = np.asarray(arc.p1, float)
+#     T_out = n(np.asarray(arc.T_out, float))     # unit tangent at parent edge
+#     Nb    = n(np.asarray(arc.N_bend, float))    # unit bend normal
+#     alpha = float(arc.alpha)                    # total bend angle (radians)
+#     r_n   = float(arc.r_n)                      # neutral-axis bend radius
 
-    Parameters
-    ----------
-    parent_pts : (M+1, 3) 3-D samples along the parent (source) edge
-    child_pts  : (M+1, 3) 3-D samples along the child  (target) edge
-    N_bend     : unit bend normal
-    alpha      : total bend angle (radians)
-    r_n        : neutral-axis bend radius
-    n_arc      : number of arc-angle sections (more → smoother curve)
+#     if abs(alpha) < 1e-9 or np.linalg.norm(p1 - p0) < 1e-9:
+#         raise ValueError('BendArc is too short or has no angle')
 
-    Returns OCC shape or None on failure.
-    """
-    Nb    = n(np.asarray(N_bend, float))
-    sa_alpha = np.sin(float(alpha)) 
-    ca_alpha = np.cos(float(alpha))
-    if abs(sa_alpha) < 1e-9: raise ValueError('alpha is too small')
+#     # For a straight edge just the two endpoints are needed
+#     parent_pts = np.array([p0, p1])
+#     C_pts      = parent_pts + r_n * Nb
+#     child_pts  = C_pts + r_n * (-np.cos(alpha) * Nb + np.sin(alpha) * T_out)
 
-    parent_pts = np.asarray(parent_pts, float)
-    child_pts  = np.asarray(child_pts,  float)
+#     """Arc-guided ThruSections loft between sampled parent and child edges.
+#     return _arc_loft_occ(parent_pts, child_pts, Nb, alpha, r_n, n_arc=n_arc)
 
-    # Arc centres along the parent edge
-    C_js = parent_pts + r_n * Nb                           # (M+1, 3)
+#     Parameters
+#     ----------
+#     parent_pts : (M+1, 3) 3-D samples along the parent (source) edge
+#     child_pts  : (M+1, 3) 3-D samples along the child  (target) edge
+#     N_bend     : unit bend normal
+#     alpha      : total bend angle (radians)
+#     r_n        : neutral-axis bend radius
+#     n_arc      : number of arc-angle sections (more → smoother curve)
 
-    # Local tangent-out back-derived from cA = C + r·(−cos α·Nb + sin α·T_out)
-    T_outs = (child_pts - C_js + r_n * ca_alpha * Nb) / (r_n * sa_alpha)  # (M+1, 3)
+#     Returns OCC shape or None on failure.
+#     """
+#     sa_alpha = np.sin(float(alpha)) 
+#     ca_alpha = np.cos(float(alpha))
+#     if abs(sa_alpha) < 1e-9: raise ValueError('alpha is too small')
 
-    thru = BRepOffsetAPI_ThruSections(False, False)   # shell, smooth loft
-    n_added = 0
+#     parent_pts = np.asarray(parent_pts, float)
+#     child_pts  = np.asarray(child_pts,  float)
 
-    for a in np.linspace(0.0, float(alpha), n_arc + 1):
-        ca, sa = np.cos(a), np.sin(a)
-        # Profile points at this arc angle
-        pts_k = C_js + r_n * (-ca * Nb + sa * T_outs)   # (M+1, 3)
+#     # Arc centres along the parent edge
+#     C_js = parent_pts + r_n * Nb                           # (M+1, 3)
 
-        poly = BRepBuilderAPI_MakePolygon()
-        for p in pts_k:
-            poly.Add(_to_pnt(p))
-        if poly.IsDone():
-            thru.AddWire(poly.Wire())
-            n_added += 1
+#     # Local tangent-out back-derived from cA = C + r·(−cos α·Nb + sin α·T_out)
+#     T_outs = (child_pts - C_js + r_n * ca_alpha * Nb) / (r_n * sa_alpha)  # (M+1, 3)
 
-    if n_added < 2:
-        raise ValueError('Not enough wires added')
+#     thru = BRepOffsetAPI_ThruSections(False, False)   # shell, smooth loft
+#     n_added = 0
+
+#     for a in np.linspace(0.0, float(alpha), n_arc + 1):
+#         ca, sa = np.cos(a), np.sin(a)
+#         # Profile points at this arc angle
+#         pts_k = C_js + r_n * (-ca * Nb + sa * T_outs)   # (M+1, 3)
+
+#         poly = BRepBuilderAPI_MakePolygon()
+#         for p in pts_k:
+#             poly.Add(_to_pnt(p))
+#         if poly.IsDone():
+#             thru.AddWire(poly.Wire())
+#             n_added += 1
+
+#     if n_added < 2:
+#         raise ValueError('Not enough wires added')
     
-    thru.Build()
-    if not thru.IsDone(): raise ValueError('Build failed')
-    return thru.Shape()
-
-
-def _bend_arc_loft_occ(arc: BendArc, n_arc=24):
-    """Arc-guided loft for BendArc (straight, possibly partial-span)."""
-    p0    = np.asarray(arc.p0, float)
-    p1    = np.asarray(arc.p1, float)
-    T_out = n(np.asarray(arc.T_out, float))
-    Nb    = n(np.asarray(arc.N_bend, float))
-    alpha = float(arc.alpha)
-    r_n   = float(arc.r_n)
-
-    if abs(alpha) < 1e-9 or np.linalg.norm(p1 - p0) < 1e-9:
-        raise ValueError('BendArc is too short or has no angle')
-
-    # For a straight edge just the two endpoints are needed
-    parent_pts = np.array([p0, p1])
-    C_pts      = parent_pts + r_n * Nb
-    child_pts  = C_pts + r_n * (-np.cos(alpha) * Nb + np.sin(alpha) * T_out)
-
-    return _arc_loft_occ(parent_pts, child_pts, Nb, alpha, r_n, n_arc=n_arc)
+#     thru.Build()
+#     if not thru.IsDone(): raise ValueError('Build failed')
+#     return thru.Shape()
 
 
 def _partial_arc_occ(arc: PartialBendArc, n_alpha=24):
     """ThruSections ruled loft for PartialBendArc — exact OCC surface."""
-    p0    = np.asarray(arc.p0, float)
-    p1    = np.asarray(arc.p1, float)
-    T_out = n(np.asarray(arc.T_out, float))
-    Nb    = n(np.asarray(arc.N_bend, float))
+
     alpha = float(arc.alpha)
-    r_n   = float(arc.r_n)
     L     = float(arc.L)
-    s0    = float(arc.s0)
-    s1    = float(arc.s1)
-    blend = float(arc.blend)
-    taper = arc.taper
 
     if L < 1e-12 or abs(alpha) < 1e-9:
         raise ValueError('PartialBendArc is too short or has no angle')
 
     def pt_at(s, a):
-        frac   = np.clip(s / L, 0.0, 1.0)
-        p_edge = (1.0 - frac) * p0 + frac * p1
-        C      = p_edge + r_n * Nb
-        return C + r_n * (-np.cos(a) * Nb + np.sin(a) * T_out)
+        """ Mapping the point s (on the parent edge) to the arc at arc angle. """
+        frac   = s / L
+        p_edge = (1.0 - frac) * arc.p0 + frac * arc.p1
+        C      = p_edge + arc.r_n * arc.N_bend
+        return C + arc.r_n * (-np.cos(a) * arc.N_bend + np.sin(a) * arc.T_in)
 
-    def ext(a):
+    def ext(a, blend):
         t = a / alpha
-        if taper == 'linear':
+        if arc.blend_mode == 'linear':
             return blend * (1.0 - t)
         return blend * (1.0 - np.sqrt(max(0.0, t * (2.0 - t))))
 
@@ -579,11 +573,8 @@ def _partial_arc_occ(arc: PartialBendArc, n_alpha=24):
 
     thru = BRepOffsetAPI_ThruSections(False, True)   # shell, ruled
     for a in a_vals:
-        e    = ext(a)
-        s_lo = max(0.0, s0 - e)
-        s_hi = min(L,   s1 + e)
-        pA   = pt_at(s_lo, a)
-        pB   = pt_at(s_hi, a)
+        pA   = pt_at(  - ext(a, arc.blend_r[0]), a)
+        pB   = pt_at(L + ext(a, arc.blend_r[1]), a)
         seg  = BRepBuilderAPI_MakeEdge(_to_pnt(pA), _to_pnt(pB)).Edge()
         w    = BRepBuilderAPI_MakeWire(seg).Wire()
         thru.AddWire(w)
@@ -867,15 +858,13 @@ class OCC_Renderer(BaseRenderer):
 
         elif isinstance(panel, FlatPanel) or isinstance(panel, PolygonPanel):
 
-            verts_2d = np.asarray(panel.vertices, float)
-            n        = panel.num_edges
-            corner_r = float(panel.corner_r) if hasattr(panel, 'corner_r') else 0.0
-            blocked  = {i for i in range(n) if panel._corner_blocked(i)}
-            origin   = np.asarray(panel.origin, float)
-            T        = np.asarray(panel.T, float)
-            W        = np.asarray(panel.W, float)
+            verts_2d    = np.asarray(panel.vertices, float)
+            corner_trim = panel.corner_trim   # final per-vertex trims (incl. extend())
+            origin      = np.asarray(panel.origin, float)
+            T           = np.asarray(panel.T, float)
+            W           = np.asarray(panel.W, float)
 
-            wire = _flat_panel_wire_occ(verts_2d, corner_r, blocked, origin, T, W)
+            wire = _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W)
             maker = BRepBuilderAPI_MakeFace(wire, True)
             if not maker.IsDone(): raise ValueError('MakeFace failed')
             return maker.Face()
@@ -884,7 +873,7 @@ class OCC_Renderer(BaseRenderer):
             raise ValueError(f'Unknown panel type: {type(panel)}')
 
 
-    def render_arc(self, obj: BendArc | PartialBendArc):
+    def render_arc(self, obj: PartialBendArc):
         """Dispatch to the correct OCC arc builder.
 
         backend : 'loft'  — arc-guided ThruSections loft (default).
@@ -892,17 +881,8 @@ class OCC_Renderer(BaseRenderer):
                 'cyl'   — exact Geom_CylindricalSurface (BendArc only).
                             Correct only for aligned equal-length straight edges.
         """
-        if isinstance(obj, PartialBendArc): return _partial_arc_occ(obj)
+        return _partial_arc_occ(obj)
 
-        # if isinstance(arc, CurvedBendArc):
-        #     return _curved_bend_arc_occ(arc)
-
-        elif isinstance(obj, BendArc):
-            if self.arc_backend == 'cyl': return _bend_arc_cyl_occ(obj)
-            else: return _bend_arc_loft_occ(obj)
-
-        else:
-            raise ValueError(f'Unknown arc type: {type(obj)}')
 
 
     def render_recess(self, rec: StampedRecess | PolygonRecess):

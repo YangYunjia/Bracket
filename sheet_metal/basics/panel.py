@@ -18,124 +18,6 @@ from .maths import n, signed_area2
 
 # ── FlatPanel ─────────────────────────────────────────────────────────────────
 
-class FlatPanel:
-    """Flat rectangular panel (mid-surface only).
-
-    Panel edge numbering
-    ────────────────────
-        C3 ─── e3 (v=W_) ─── C2
-        │  e0 (u=0)  e1 (u=L)  │
-        C0 ─── e2 (v=0)  ─── C1
-
-      e0  C0→C3   outward = -T
-      e1  C1→C2   outward = +T
-      e2  C0→C1   outward = -W
-      e3  C3→C2   outward = +W
-
-    corner_r : radius for free corners (corners whose two adjacent edges are
-               not connected to child panels).  0 = sharp corners everywhere.
-    """
-
-    # Per corner: which end of each adjacent edge the corner lies at.
-    # (edge_idx, at_start) where at_start=True → corner is at frac=0 of that edge.
-    # C0=(0,0): start of e0 (e0:C0→C3), start of e2 (e2:C0→C1)
-    # C1=(L,0): start of e1 (e1:C1→C2), end   of e2
-    # C2=(L,W): end   of e1,             end   of e3 (e3:C3→C2)
-    # C3=(0,W): end   of e0,             start of e3
-    _CORNER_EDGE_ENDS = [
-        ((0, True),  (2, True)),
-        ((1, True),  (2, False)),
-        ((1, False), (3, False)),
-        ((0, False), (3, True)),
-    ]
-
-    # Which FlatPanel corner is at the start and end of each edge.
-    # e0: C0→C3, e1: C1→C2, e2: C0→C1, e3: C3→C2
-    _EDGE_CORNERS = [(0, 3), (1, 2), (0, 1), (3, 2)]
-
-    def __init__(self, origin, T, W, length, width, t=2.0, name='P',
-                 corner_r=0.0):
-        self.origin      = np.asarray(origin, float)
-        self.T           = n(T)
-        self.W           = n(W)
-        self.length      = float(length)
-        self.width       = float(width)
-        self.t           = float(t)
-        self.name        = str(name)
-        self.corner_r    = float(corner_r)
-        self._edge_spans = {}   # edge_idx → [(start_frac, end_frac), ...]
-
-    @property
-    def vertices(self):
-        return np.array([[0, 0], [self.length, 0], [self.length, self.width], [0, self.width]], float)
-
-    @property
-    def num_edges(self):
-        return 4
-
-    def _register_child(self, edge_idx, start_frac=0.0, end_frac=1.0):
-        """Record a child panel spanning [start_frac, end_frac] on this edge.
-
-        Raises ValueError if the new span overlaps any existing span.
-        """
-        sf, ef = float(start_frac), float(end_frac)
-        spans  = self._edge_spans.setdefault(edge_idx, [])
-        for s, e in spans:
-            if sf < e - 1e-6 and ef > s + 1e-6:
-                raise ValueError(
-                    f'Child [{sf:.3g},{ef:.3g}] overlaps existing child '
-                    f'[{s:.3g},{e:.3g}] on edge {edge_idx}.')
-        spans.append((sf, ef))
-
-    def _corner_blocked(self, i):
-        """Return True if corner i must not be rounded (a child touches it)."""
-        for edge_idx, at_start in self._CORNER_EDGE_ENDS[i]:
-            for sf, ef in self._edge_spans.get(edge_idx, []):
-                if at_start and sf < 1e-6:
-                    return True
-                if not at_start and ef > 1.0 - 1e-6:
-                    return True
-        return False
-
-    def _edge_flat_trims(self, edge_idx):
-        """Return (trim_start, trim_end) distances that the flat region of edge
-        edge_idx is set back from each corner by corner rounding.
-
-        A trim is non-zero only when corner_r > 0 and the corner at that end
-        is free (not blocked by any registered child).  All FlatPanel corners
-        are 90°, so the trim equals corner_r.
-        """
-        if self.corner_r == 0.0:
-            return 0.0, 0.0
-        c_start, c_end = self._EDGE_CORNERS[edge_idx]
-        ts = 0.0 if self._corner_blocked(c_start) else self.corner_r
-        te = 0.0 if self._corner_blocked(c_end)   else self.corner_r
-        return ts, te
-
-    @property
-    def N(self):
-        return n(np.cross(self.T, self.W))
-
-    def corners(self):
-        o, T, W, L, Wd = self.origin, self.T, self.W, self.length, self.width
-        return [o, o+L*T, o+L*T+Wd*W, o+Wd*W]   # C0,C1,C2,C3
-
-    def edge(self, i):
-        """Return (p0, p1, edge_dir, outward_dir) for edge i."""
-        C = self.corners()
-        T, W = self.T, self.W
-        data = [
-            (C[0], C[3],  W, -T),
-            (C[1], C[2],  W,  T),
-            (C[0], C[1],  T, -W),
-            (C[3], C[2],  T,  W),
-        ]
-        p0, p1, ed, out = data[i]
-        return p0.copy(), p1.copy(), n(ed), n(out)
-
-
-# ── PolygonPanel ──────────────────────────────────────────────────────────────
-
 class PolygonPanel:
     """Flat panel with an arbitrary polygon outline.
 
@@ -151,32 +33,33 @@ class PolygonPanel:
                not connected to child panels).  0 = sharp everywhere.
     """
 
-    def __init__(self, origin, T, W, vertices, t=2.0, name='P',
-                 corner_r=0.0):
+    def __init__(self, origin, T, W, vertices, name='P', corner_r=0.0):
         """
         Parameters
         ----------
         origin   : 3-D anchor point
         T, W     : two orthogonal 3-D vectors spanning the panel plane
         vertices : (N, 2) array-like of (u, v) pairs, N >= 3
-        t        : sheet thickness
         name     : label string
         corner_r : rounding radius for free corners
         """
         self.origin      = np.asarray(origin, float)
         self.T           = n(T)
         self.W           = n(W)
-        self.t           = float(t)
         self.name        = str(name)
         self.corner_r    = float(corner_r)
-        self._edge_spans = {}
 
         pts = np.asarray(vertices, float)
         if pts.ndim != 2 or pts.shape[1] != 2 or len(pts) < 3:
             raise ValueError('vertices must be (N>=3, 2) array of (u, v) pairs.')
         if signed_area2(pts) < 0:
             pts = pts[::-1]        # normalise to CCW
-        self.vertices = pts        # (N, 2)
+        self.vertices = pts        # (N, 2), relative to the origin
+
+        self._edge_lengths = [np.linalg.norm(self.start_idx(i) - self.end_idx(i)) for i in range(len(vertices))]
+        self._edge_spans = [[] for _ in range(len(vertices))] # edge_idx → [(start_frac, end_frac), ...] (indicate the occupied portion of the edge)
+        # self.corner_blocked = [False] * len(vertices) # indicate if the corner is blocked by a child panel
+        self.corner_trim    = [self._initial_corner_trim(i) for i in range(len(vertices))] # compute the corner-rounding trim length at each vertex
 
     @property
     def N(self):
@@ -189,35 +72,24 @@ class PolygonPanel:
     def num_edges(self):
         return len(self.vertices)
 
-    def _register_child(self, edge_idx, start_frac=0.0, end_frac=1.0):
+    def edge_length(self, edge_idx):
+        return self._edge_lengths[edge_idx]
+
+    def start_idx(self, edge_idx):
+        return edge_idx
+
+    def end_idx(self, edge_idx):
+        return (edge_idx + 1) % len(self.vertices)
+
+    def is_edge_occupied(self, edge_idx: int, start_frac: float, end_frac: float) -> bool:
+        return any(float(start_frac) < e - 1e-6 and float(end_frac) > s + 1e-6 for s, e in self._edge_spans[edge_idx])
+
+    def _register_child(self, edge_idx: int, start_frac: float = 0.0, end_frac: float = 1.0):
         """Record a child panel spanning [start_frac, end_frac] on this edge.
-
-        Raises ValueError if the new span overlaps any existing span.
         """
-        sf, ef = float(start_frac), float(end_frac)
-        spans  = self._edge_spans.setdefault(edge_idx, [])
-        for s, e in spans:
-            if sf < e - 1e-6 and ef > s + 1e-6:
-                raise ValueError(
-                    f'Child [{sf:.3g},{ef:.3g}] overlaps existing child '
-                    f'[{s:.3g},{e:.3g}] on edge {edge_idx}.')
-        spans.append((sf, ef))
+        self._edge_spans[edge_idx].append((float(start_frac), float(end_frac)))
 
-    def _corner_blocked(self, i):
-        """Return True if vertex i must not be rounded (a child touches it).
-
-        Vertex i is at the end of edge (i-1)%n and the start of edge i.
-        """
-        n = len(self.vertices)
-        for sf, ef in self._edge_spans.get((i - 1) % n, []):
-            if ef > 1.0 - 1e-6:
-                return True
-        for sf, ef in self._edge_spans.get(i, []):
-            if sf < 1e-6:
-                return True
-        return False
-
-    def _corner_trim(self, i):
+    def _initial_corner_trim(self, i: int) -> float:
         """Compute the corner-rounding trim length at vertex i.
 
         Returns 0.0 if corner_r == 0, the vertex is concave, or the corner is
@@ -225,7 +97,7 @@ class PolygonPanel:
             trim = corner_r * tan(φ/2)
         where φ is the exterior deflection angle at vertex i.
         """
-        if self.corner_r == 0.0 or self._corner_blocked(i):
+        if self.corner_r == 0.0:
             return 0.0
         n = len(self.vertices)
         v     = self.vertices[i]
@@ -250,10 +122,7 @@ class PolygonPanel:
 
         edge_idx goes from vertex edge_idx to vertex (edge_idx+1)%n.
         """
-        if self.corner_r == 0.0:
-            return 0.0, 0.0
-        n = len(self.vertices)
-        return self._corner_trim(edge_idx), self._corner_trim((edge_idx + 1) % n)
+        return self.corner_trim[self.start_idx(edge_idx)], self.corner_trim[self.end_idx(edge_idx)]
 
     def edge(self, i):
         """Return (p0, p1, edge_dir, outward_dir) for polygon edge i.
@@ -261,20 +130,38 @@ class PolygonPanel:
         Compatible with extend_panel / SheetMetalModel.extend().
         """
         verts = self.vertices
-        n     = len(verts)
-        u0, v0 = verts[i % n]
-        u1, v1 = verts[(i + 1) % n]
-        p0 = self._pt3(u0, v0)
-        p1 = self._pt3(u1, v1)
-        du, dv = u1 - u0, v1 - v0
-        L = np.hypot(du, dv)
-        if L < 1e-12:
-            raise ValueError(f'Polygon edge {i} has zero length.')
+        dvert = (verts[self.end_idx(i)] - verts[self.start_idx(i)])
+        p0 = self._pt3(*verts[self.start_idx(i)])
+        p1 = self._pt3(*verts[self.end_idx(i)])
+
         # Edge direction in 3-D
-        ed  = (du/L)*self.T + (dv/L)*self.W
+        ed  = dvert[0]*self.T + dvert[1]*self.W
         # Outward normal: right-hand perp of CCW edge = rotate −90°
-        out = (dv/L)*self.T + (-du/L)*self.W
+        out = dvert[1] * self.T - dvert[0] * self.W
+
         return p0.copy(), p1.copy(), n(ed), n(out)
+
+
+class FlatPanel(PolygonPanel):
+    """Flat rectangular panel (mid-surface only).
+    The panel lives in the plane spanned by T and W from origin.
+
+    attributes:
+        origin : 3-D anchor point
+        T, W   : two orthogonal 3-D vectors spanning the panel plane
+        length : length of the panel in the t-direction
+        width  : width of the panel in the w-direction
+        t      : sheet thickness
+        name   : label string
+        corner_r : rounding radius for free corners
+    """
+
+
+    def __init__(self, origin, T, W, length, width, name='F',
+                 corner_r=0.0):
+
+        vertices = np.array([[0.0, 0.0], [length, 0.0], [length, width], [0.0, width]])
+        super().__init__(origin, T, W, vertices, name, corner_r)
 
 
 # ── Curve3D ───────────────────────────────────────────────────────────────────
@@ -446,27 +333,30 @@ class Curve3D:
 class LoftPanel:
     """Panel defined by 2 or more Curve3D profiles (ruled or smooth loft).
 
-    profiles[0]  — root edge  (attaches to parent via BendArc)
-    profiles[-1] — free edge  (children extend from here)
+    profiles[0]  — root profile  (attaches to parent via BendArc)
+    profiles[-1] — free profile  (children extend from here)
     profiles[1:-1] — optional intermediate cross-sections
 
     ruled=True  → straight rulings between corresponding profile points
-                  (ThruSections ruled surface in OCC)
     ruled=False → smooth skinned surface through all profiles
 
-    Edge numbering
-    ──────────────
-      0 : root profile  (profiles[0])
-      1 : free profile  (profiles[-1])
-      2 : "first" long edge  profiles[0].endpoints()[0] → profiles[-1].endpoints()[0]
-      3 : "second" long edge profiles[0].endpoints()[1] → profiles[-1].endpoints()[1]
+    Edge numbering (CCW virtual quad — same convention as PolygonPanel)
+    ─────────────────────────────────────────────────────────────────
+    Corner ring: v0=a0_r, v1=b0_r, v2=b0_f, v3=a0_f
+      (profile endpoints: root a0_r→b0_r, free a0_f→b0_f at t=0→1)
 
-    N_at_edge(i) returns the panel normal at that edge, needed by extend_panel()
-    when child panels are grown from this LoftPanel.
+      0 : root profile   v0 → v1
+      1 : long edge      v1 → v2  (trailing / t=1 side)
+      2 : free profile   v2 → v3  (extend children from here)
+      3 : long edge      v3 → v0  (leading / t=0 side)
+
+    extend() / pre_extend() support edges 0 and 2 only (the two profiles).
     """
 
+    _EXTENDABLE_EDGES = (0, 2)
+
     def __init__(self, profiles, t_start=None, t_end=None,
-                 spine_pts=None, ruled=False, name='LP', t=2.0):
+                 spine_pts=None, ruled=False, name='LP'):
         """
         Parameters
         ----------
@@ -477,7 +367,6 @@ class LoftPanel:
                     defaults to profile midpoints
         ruled     : bool — ruled (True) or smooth (False) loft
         name      : label string
-        t         : sheet thickness
         """
         if len(profiles) < 2:
             raise ValueError('LoftPanel needs at least 2 profiles.')
@@ -493,8 +382,9 @@ class LoftPanel:
         self.profiles    = [_coerce(p) for p in profiles]
         self.ruled       = bool(ruled)
         self.name        = str(name)
-        self.t           = float(t)
-        self._edge_spans = {}
+        self.corner_r    = 0.0
+        self.corner_trim = [0.0, 0.0, 0.0, 0.0]
+        self._edge_spans = [[] for _ in range(4)]
 
         self.t_start = n(np.asarray(t_start, float)) if t_start is not None else None
         self.t_end   = n(np.asarray(t_end,   float)) if t_end   is not None else None
@@ -506,6 +396,36 @@ class LoftPanel:
         else:
             self.spine_pts = [(a + b) / 2.0
                               for a, b in [p.endpoints() for p in self.profiles]]
+
+    # ── CCW corner ring (PolygonPanel-compatible indexing) ───────────────────
+
+    def _corners(self):
+        """CCW corners v0..v3 of the loft boundary quad."""
+        a0_r, b0_r = self.profiles[0].endpoints()
+        a0_f, b0_f = self.profiles[-1].endpoints()
+        return [np.asarray(p, float) for p in (a0_r, b0_r, b0_f, a0_f)]
+
+    @property
+    def num_edges(self):
+        return 4
+
+    def start_idx(self, edge_idx):
+        return int(edge_idx)
+
+    def end_idx(self, edge_idx):
+        return (int(edge_idx) + 1) % 4
+
+    def edge_length(self, edge_idx):
+        c = self._corners()
+        i = int(edge_idx)
+        return float(np.linalg.norm(c[(i + 1) % 4] - c[i]))
+
+    def is_edge_occupied(self, edge_idx: int, start_frac: float, end_frac: float) -> bool:
+        return any(float(start_frac) < e - 1e-6 and float(end_frac) > s + 1e-6
+                   for s, e in self._edge_spans[edge_idx])
+
+    def _register_child(self, edge_idx: int, start_frac: float = 0.0, end_frac: float = 1.0):
+        self._edge_spans[edge_idx].append((float(start_frac), float(end_frac)))
 
     # ── normal helpers ────────────────────────────────────────────────────────
 
@@ -519,7 +439,6 @@ class LoftPanel:
         t_end = 0.0 if long_side == 0 else 1.0
         tang_prof = prof.tangent_at(t_end)
 
-        # Long-edge direction: connecting same end across profiles
         a0, _ = self.profiles[0].endpoints()
         a1, _ = self.profiles[-1].endpoints()
         _, b0 = self.profiles[0].endpoints()
@@ -531,60 +450,38 @@ class LoftPanel:
         return n(np.cross(tang_prof, long_dir))
 
     def N_at_edge(self, edge_idx):
-        """Panel normal at a boundary edge (needed by extend_panel protocol)."""
+        """Panel normal at boundary edge edge_idx (extend / bend protocol)."""
+        mid = len(self.profiles) // 2
         if edge_idx == 0:
             return self._edge_normal(0, long_side=0)
         if edge_idx == 1:
-            return self._edge_normal(-1, long_side=0)
-        # long edges 2/3: midpoint normal (rare to extend from long edges)
-        return self._edge_normal(len(self.profiles) // 2, long_side=(edge_idx - 2))
+            return self._edge_normal(mid, long_side=1)
+        if edge_idx == 2:
+            return self._edge_normal(-1, long_side=1)
+        if edge_idx == 3:
+            return self._edge_normal(mid, long_side=0)
+        raise IndexError(f'LoftPanel has 4 edges (0–3), got {edge_idx}.')
 
     @property
     def N(self):
         return self.N_at_edge(0)
 
-    # ── child tracking ────────────────────────────────────────────────────────
-
-    def _register_child(self, edge_idx, start_frac=0.0, end_frac=1.0):
-        sf, ef = float(start_frac), float(end_frac)
-        spans  = self._edge_spans.setdefault(edge_idx, [])
-        for s, e in spans:
-            if sf < e - 1e-6 and ef > s + 1e-6:
-                raise ValueError(
-                    f'Child [{sf:.3g},{ef:.3g}] overlaps existing child '
-                    f'[{s:.3g},{e:.3g}] on LoftPanel edge {edge_idx}.')
-        spans.append((sf, ef))
-
-    def _corner_blocked(self, corner_idx):
-        return False   # LoftPanel corners are never rounded
-
-    # ── edge geometry (extend_panel compatible) ───────────────────────────────
+    # ── edge geometry (PolygonPanel-compatible) ─────────────────────────────
 
     def edge(self, i):
-        """Return (p0, p1, edge_dir, outward_dir) for edge i.
+        """Return (p0, p1, edge_dir, outward_dir) for CCW edge i.
 
-        For edges 0 and 1 (profile edges) p0/p1 are the profile endpoints;
-        edge_dir is the chord direction; outward_dir is the long-edge direction
-        (pointing away from the opposite profile).
-        For edges 2 and 3 (long edges) p0/p1 span from root to free profile.
+        outward_dir matches PolygonPanel: in-plane exterior normal
+        T_out = normalise(edge_dir × N).
         """
-        a0_r, b0_r = self.profiles[0].endpoints()   # root profile endpoints
-        a0_f, b0_f = self.profiles[-1].endpoints()  # free profile endpoints
-
-        if i == 0:   # root profile
-            chord = n(b0_r - a0_r)
-            long  = n(a0_r - a0_f)   # pointing away from free end
-            out   = n(np.cross(chord, self.N_at_edge(0)))
-            return a0_r.copy(), b0_r.copy(), chord, out
-        if i == 1:   # free profile — use t_end when set for G1 with downstream arc
-            chord = n(b0_f - a0_f)
-            out   = self.t_end.copy() if self.t_end is not None else n(a0_f - a0_r)
-            return a0_f.copy(), b0_f.copy(), chord, out
-        if i == 2:   # first long edge (t=0 side)
-            return a0_r.copy(), a0_f.copy(), n(a0_f - a0_r), self.N_at_edge(2)
-        if i == 3:   # second long edge (t=1 side)
-            return b0_r.copy(), b0_f.copy(), n(b0_f - b0_r), self.N_at_edge(3)
-        raise IndexError(f'LoftPanel has 4 edges (0–3), got {i}.')
+        if i not in (0, 1, 2, 3):
+            raise IndexError(f'LoftPanel has 4 edges (0–3), got {i}.')
+        corners = self._corners()
+        p0 = corners[i]
+        p1 = corners[(i + 1) % 4]
+        ed = n(p1 - p0)
+        out = n(np.cross(ed, self.N_at_edge(i)))
+        return p0.copy(), p1.copy(), ed, out
 
 
 # ── PipePanel ──────────────────────────────────────────────────────────────────

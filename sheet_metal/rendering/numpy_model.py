@@ -18,7 +18,7 @@ Quality parameters accepted by render():
 import numpy as np
 from ..basics.maths import signed_area2, pt_in_tri
 from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel
-from ..basics.bending import BendArc, PartialBendArc
+from ..basics.bending import PartialBendArc
 from ..basics.recess import StampedRecess, PolygonRecess
 
 from .basics import BaseRenderer
@@ -265,25 +265,15 @@ class NumpyBracketModel(BaseRenderer):
     # ---------------------------------------
     # BendArc rendering
     # ---------------------------------------
-    def render_arc(self, obj: BendArc | PartialBendArc):
-        if isinstance(obj, BendArc):
-            return self.render_bend_arc(obj)
-        if isinstance(obj, PartialBendArc):
-            return self.render_partial_bend_arc(obj)
-        raise ValueError(f'Unknown arc type: {type(obj)}')
+    def render_arc(self, obj: PartialBendArc):
+        return self.render_partial_bend_arc(obj)
 
     @staticmethod
-    def _pt(obj: BendArc | PartialBendArc, s, a):
+    def _pt(obj: PartialBendArc, s, a):
         p_edge = (1-s)*obj.p0 + s*obj.p1
         C      = p_edge + obj.r_n * obj.N_bend
         return C + obj.r_n * (-np.cos(a)*obj.N_bend + np.sin(a)*obj.T_out)
 
-    def render_bend_arc(self, obj: BendArc):
-        alphas = np.linspace(0, obj.alpha, self.n_arc+1)
-        return [[self._pt(obj, 0, alphas[i]),  self._pt(obj, 1, alphas[i]),
-                 self._pt(obj, 1, alphas[i+1]), self._pt(obj, 0, alphas[i+1])]
-                for i in range(self.n_arc)]
-    
     @staticmethod
     def _ext(obj: PartialBendArc, a):
         t = a / obj.alpha

@@ -439,3 +439,51 @@ def _curved_bend_arc_occ(arc, n_arc=24):
 
     return _compound_from_face_lists(arc.faces())
 '''
+
+
+'''
+if crv is not None and not ((start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)):
+    # ── Curved full-edge path ──────────────────────────────────────────────
+    # T_out at the start of the child's span from the curve tangent.
+    tang_start  = crv.tangent(float(start_frac))
+    tn          = np.linalg.norm(tang_start)
+    if tn > 1e-12:
+        tang_start /= tn
+    T_out_start = n(tang_start[1]*parent.T - tang_start[0]*parent.W)
+
+    T_child = n(np.sin(alpha)*bdir + np.cos(alpha)*T_out_start)
+    W_child = edge_dir   # chord direction — child is flat
+
+    C0           = p0 + r_n * bdir
+    child_origin = C0 + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_start)
+
+    # child_width = projected distance from C0 to C3 along W_child.
+    tang_end = crv.tangent(float(end_frac))
+    tn_e     = np.linalg.norm(tang_end)
+    if tn_e > 1e-12:
+        tang_end /= tn_e
+    T_out_end  = n(tang_end[1]*parent.T - tang_end[0]*parent.W)
+    C_end      = p1 + r_n * bdir
+    q_end      = C_end + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_end)
+    child_width = float(np.dot(q_end - child_origin, W_child))
+    if child_width < 1e-6:
+        child_width = float(np.linalg.norm(p1 - p0))
+
+    # Build child SplinePanel with arc-transformed root edge (edge 3).
+    root_crv = _arc_transform_curve(
+        crv, parent, alpha, r_n, bdir, T_child, W_child, child_origin)
+    child = SplinePanel(
+        origin=child_origin, T=T_child, W=W_child,
+        vertices=[[0, 0], [child_length, 0],
+                    [child_length, child_width], [0, child_width]],
+        edge_curves=[None, None, None, root_crv],
+        t=t, name=f'{parent.name}.e{edge_idx}',
+    )
+
+    arc = CurvedBendArc(
+        edge_curve=crv,
+        panel_origin=parent.origin, panel_T=parent.T, panel_W=parent.W,
+        N_bend=bdir, alpha=alpha, r_n=r_n,
+    )
+    return child, arc
+'''

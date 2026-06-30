@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel
-from ..basics.bending import BendArc, PartialBendArc
+from ..basics.bending import PartialBendArc
 from ..basics.recess import StampedRecess, PolygonRecess
 from ..basics.model import SheetMetalModel
 from ..basics.maths import n
@@ -49,7 +49,7 @@ class BaseRenderer:
         pass
 
     @abstractmethod
-    def render_arc(self, obj: BendArc | PartialBendArc):
+    def render_arc(self, obj: PartialBendArc):
         pass
 
     @abstractmethod

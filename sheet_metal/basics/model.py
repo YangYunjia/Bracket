@@ -6,7 +6,7 @@ import numpy as np
 
 from .maths import n
 from .panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel, Curve3D
-from .bending import BendArc, PartialBendArc
+from .bending import PartialBendArc
 from .tree import PanelNode
 from .recess import StampedRecess, PolygonRecess
 
@@ -45,281 +45,6 @@ def _arc_transform_curve(parent_crv, parent, alpha, r_n, bdir,
     return BSplineEdge(child_cp, parent_crv.degree)
 '''
 
-def extend_panel(parent, edge_idx, angle_deg, child_length,
-                 inner_r=5.0, bend_dir=+1,
-                 start_frac=0.0, end_frac=1.0,
-                 blend_r=None, taper='arc'):
-    """Extend a child panel from one edge of a parent panel.
-
-    Parameters
-    ----------
-    parent      : FlatPanel | PolygonPanel | SplinePanel
-    edge_idx    : edge index on the parent panel
-    angle_deg   : bend angle in degrees
-    child_length: panel length after the bend
-    inner_r     : inner bend radius (mm)
-    bend_dir    : +1 toward +N_parent, -1 toward -N_parent
-    start_frac  : fraction along edge where child starts  (0–1)
-    end_frac    : fraction along edge where child ends    (0–1)
-    blend_r     : lateral blend half-width for partial bends (default = r_n)
-    taper       : 'arc' or 'linear' (PartialBendArc only)
-
-    Returns
-    -------
-    (child, arc)
-    For straight parent edges : (FlatPanel,    BendArc | PartialBendArc)
-    For curved  parent edges  : (SplinePanel,  CurvedBendArc)
-                                (partial curved edges use PartialBendArc as approx)
-    """
-    p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
-    L_edge  = float(np.linalg.norm(p1_full - p0_full))
-    ed_unit = (p1_full - p0_full) / L_edge
-
-    # Trim the reference edge to the flat (non-rounded-corner) region.
-    if hasattr(parent, '_edge_flat_trims'):
-        ts, te = parent._edge_flat_trims(edge_idx)
-        if start_frac > 1e-6:
-            p0_full = p0_full + ts * ed_unit
-        if end_frac < 1.0 - 1e-6:
-            p1_full = p1_full - te * ed_unit
-        L_edge = float(np.linalg.norm(p1_full - p0_full))
-
-    p0 = p0_full + start_frac * (p1_full - p0_full)
-    p1 = p0_full + end_frac   * (p1_full - p0_full)
-
-    t     = parent.t
-    alpha = np.radians(abs(angle_deg))
-    # Use edge-local normal when available (e.g. LoftPanel has varying normal).
-    N_src = (parent.N_at_edge(edge_idx)
-             if hasattr(parent, 'N_at_edge')
-             else parent.N)
-    bdir  = float(bend_dir) * N_src
-    r_n   = inner_r + t / 2
-    # Check for a curved parent edge (SplinePanel only).
-    crv = parent.edge_curve(edge_idx) if hasattr(parent, 'edge_curve') else None
-
-    '''
-    if crv is not None and not ((start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)):
-        # ── Curved full-edge path ──────────────────────────────────────────────
-        # T_out at the start of the child's span from the curve tangent.
-        tang_start  = crv.tangent(float(start_frac))
-        tn          = np.linalg.norm(tang_start)
-        if tn > 1e-12:
-            tang_start /= tn
-        T_out_start = n(tang_start[1]*parent.T - tang_start[0]*parent.W)
-
-        T_child = n(np.sin(alpha)*bdir + np.cos(alpha)*T_out_start)
-        W_child = edge_dir   # chord direction — child is flat
-
-        C0           = p0 + r_n * bdir
-        child_origin = C0 + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_start)
-
-        # child_width = projected distance from C0 to C3 along W_child.
-        tang_end = crv.tangent(float(end_frac))
-        tn_e     = np.linalg.norm(tang_end)
-        if tn_e > 1e-12:
-            tang_end /= tn_e
-        T_out_end  = n(tang_end[1]*parent.T - tang_end[0]*parent.W)
-        C_end      = p1 + r_n * bdir
-        q_end      = C_end + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_end)
-        child_width = float(np.dot(q_end - child_origin, W_child))
-        if child_width < 1e-6:
-            child_width = float(np.linalg.norm(p1 - p0))
-
-        # Build child SplinePanel with arc-transformed root edge (edge 3).
-        root_crv = _arc_transform_curve(
-            crv, parent, alpha, r_n, bdir, T_child, W_child, child_origin)
-        child = SplinePanel(
-            origin=child_origin, T=T_child, W=W_child,
-            vertices=[[0, 0], [child_length, 0],
-                      [child_length, child_width], [0, child_width]],
-            edge_curves=[None, None, None, root_crv],
-            t=t, name=f'{parent.name}.e{edge_idx}',
-        )
-
-        arc = CurvedBendArc(
-            edge_curve=crv,
-            panel_origin=parent.origin, panel_T=parent.T, panel_W=parent.W,
-            N_bend=bdir, alpha=alpha, r_n=r_n,
-        )
-        return child, arc
-    '''
-
-    # ── Straight-edge path (or partial curved — uses chord approximation) ──────
-    T_child     = n(np.sin(alpha)*bdir + np.cos(alpha)*T_out)
-    W_child     = edge_dir
-    child_width = float(np.linalg.norm(p1 - p0))
-
-    C0           = p0 + r_n * bdir
-    child_origin = C0 + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out)
-
-    child = FlatPanel(
-        origin=child_origin, T=T_child, W=W_child,
-        length=child_length, width=child_width,
-        t=t, name=f'{parent.name}.e{edge_idx}',
-    )
-
-    is_partial = (start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)
-
-    if is_partial:
-        _br = float(blend_r) if blend_r is not None else r_n
-        s0  = start_frac * L_edge
-        s1  = end_frac   * L_edge
-        # Cap blend to the available flat-edge space on each partial side so
-        # the root touches the flat-edge boundary at a=0 without a wide
-        # constant-width section (which would look like an extra rectangle).
-        if start_frac > 1e-6 and s0 < _br:
-            _br = s0
-        if end_frac < 1.0 - 1e-6 and (L_edge - s1) < _br:
-            _br = L_edge - s1
-        arc = PartialBendArc(
-            p0_full=p0_full, p1_full=p1_full,
-            s_start=s0, s_end=s1,
-            T_out=T_out, N_bend=bdir,
-            alpha=alpha, r_n=r_n,
-            blend_r=_br, taper=taper,
-        )
-    else:
-        arc = BendArc(p0=p0, p1=p1, T_out=T_out, N_bend=bdir,
-                      alpha=alpha, r_n=r_n)
-
-    return child, arc
-
-
-def extend_arm(parent, edge_idx, angle_deg, free_curve,
-               inner_r=5.0, bend_dir=+1,
-               start_frac=0.0, end_frac=1.0,
-               intermediate_curves=None, t_end=None, ruled=False,
-               panel_type='loft'):
-    """Extend a LoftPanel or PipePanel child from a parent panel edge.
-
-    Both panel types accept identical parameters and carry the same G1
-    tangent constraints (t_start from the connecting BendArc, t_end from
-    root-to-free geometry or the supplied override).
-
-    The OCC rendering backend differs:
-      'loft' → LoftPanel  — ThruSections smooth loft; aux-profile tangent
-                            steering when t_start / t_end are set (~G1)
-      'pipe' → PipePanel  — BRepOffsetAPI_MakePipeShell with SetDiscreteMode
-                            and midpoint-vertex Location (exact G1 via spine
-                            tangent constraints); falls back to ThruSections+aux
-
-    Parameters
-    ----------
-    parent             : any panel type
-    edge_idx           : edge on parent
-    angle_deg          : bend angle in degrees
-    free_curve         : Curve3D or [(x,y,z),(x,y,z)] for the far edge
-    inner_r            : inner bend radius
-    bend_dir           : +1 / -1
-    start_frac         : fraction along parent edge where child starts (0–1)
-    end_frac           : fraction along parent edge where child ends   (0–1)
-    intermediate_curves: optional list of Curve3D between root and free
-    t_end              : optional unit tangent at the free edge
-                         (default: n(free_leading − root_leading))
-    ruled              : True → ruled surface; False → smooth loft (default)
-    panel_type         : 'loft' (default) or 'pipe'
-
-    Returns
-    -------
-    (child_panel, arc)
-    """
-    p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
-    L_edge  = float(np.linalg.norm(p1_full - p0_full))
-    ed_unit = (p1_full - p0_full) / L_edge
-
-    if hasattr(parent, '_edge_flat_trims'):
-        ts, te = parent._edge_flat_trims(edge_idx)
-        if start_frac > 1e-6:
-            p0_full = p0_full + ts * ed_unit
-        if end_frac < 1.0 - 1e-6:
-            p1_full = p1_full - te * ed_unit
-        L_edge = float(np.linalg.norm(p1_full - p0_full))
-
-    p0 = p0_full + start_frac * (p1_full - p0_full)
-    p1 = p0_full + end_frac   * (p1_full - p0_full)
-
-    t     = parent.t
-    alpha = np.radians(abs(angle_deg))
-    N_src = (parent.N_at_edge(edge_idx)
-             if hasattr(parent, 'N_at_edge') else parent.N)
-    bdir  = float(bend_dir) * N_src
-    r_n   = inner_r + t / 2
-
-    T_child      = n(np.sin(alpha) * bdir + np.cos(alpha) * T_out)
-    C0           = p0 + r_n * bdir
-    child_origin = C0 + r_n * (-np.cos(alpha) * bdir + np.sin(alpha) * T_out)
-    C1           = p1 + r_n * bdir
-    child_far    = C1 + r_n * (-np.cos(alpha) * bdir + np.sin(alpha) * T_out)
-
-    root_curve = Curve3D.line(child_origin, child_far)
-
-    if not isinstance(free_curve, Curve3D):
-        pts = np.asarray(free_curve, float)
-        free_curve = (Curve3D.line(pts[0], pts[1])
-                      if pts.ndim == 2 and len(pts) == 2
-                      else Curve3D('polyline', _pts=pts))
-
-    profiles = ([root_curve]
-                + (list(intermediate_curves) if intermediate_curves else [])
-                + [free_curve])
-
-    if t_end is None:
-        a_root, a_free = root_curve.endpoints()[0], free_curve.endpoints()[0]
-        t_end_val = n(a_free - a_root)
-    else:
-        t_end_val = n(np.asarray(t_end, float))
-
-    kwargs = dict(profiles=profiles, t_start=T_child, t_end=t_end_val,
-                  ruled=ruled, name=f'{parent.name}.e{edge_idx}', t=t)
-    child = LoftPanel(**kwargs) if panel_type == 'loft' else PipePanel(**kwargs)
-
-    is_partial = (start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)
-    if is_partial:
-        _br = r_n
-        s0  = start_frac * L_edge
-        s1  = end_frac   * L_edge
-        if start_frac > 1e-6 and s0 < _br:
-            _br = s0
-        if end_frac < 1.0 - 1e-6 and (L_edge - s1) < _br:
-            _br = L_edge - s1
-        arc = PartialBendArc(
-            p0_full=p0_full, p1_full=p1_full,
-            s_start=s0, s_end=s1,
-            T_out=T_out, N_bend=bdir,
-            alpha=alpha, r_n=r_n,
-            blend_r=_br,
-        )
-    else:
-        arc = BendArc(p0=p0, p1=p1, T_out=T_out, N_bend=bdir,
-                      alpha=alpha, r_n=r_n)
-
-    return child, arc
-
-
-def extend_loft(parent, edge_idx, angle_deg, free_curve,
-                inner_r=5.0, bend_dir=+1,
-                start_frac=0.0, end_frac=1.0,
-                intermediate_curves=None, t_end=None, ruled=False):
-    """Extend a LoftPanel child (ThruSections rendering).  See extend_arm()."""
-    return extend_arm(parent, edge_idx, angle_deg, free_curve,
-                      inner_r=inner_r, bend_dir=bend_dir,
-                      start_frac=start_frac, end_frac=end_frac,
-                      intermediate_curves=intermediate_curves,
-                      t_end=t_end, ruled=ruled, panel_type='loft')
-
-
-def extend_pipe(parent, edge_idx, angle_deg, free_curve,
-                inner_r=5.0, bend_dir=+1,
-                start_frac=0.0, end_frac=1.0,
-                intermediate_curves=None, t_end=None, ruled=False):
-    """Extend a PipePanel child (MakePipeShell rendering).  See extend_arm()."""
-    return extend_arm(parent, edge_idx, angle_deg, free_curve,
-                      inner_r=inner_r, bend_dir=bend_dir,
-                      start_frac=start_frac, end_frac=end_frac,
-                      intermediate_curves=intermediate_curves,
-                      t_end=t_end, ruled=ruled, panel_type='pipe')
-
 
 class SheetMetalModel:
     """Incrementally built sheet-metal mid-surface model.
@@ -347,7 +72,7 @@ class SheetMetalModel:
     def add_panel(self, origin, T, W, length, width, name=None, corner_r=0.0):
         if name is None:
             name = f'P{len(self.panels)}'
-        p = FlatPanel(origin, T, W, length, width, self.t, name, corner_r=corner_r)
+        p = FlatPanel(origin, T, W, length, width, name, corner_r=corner_r)
         node = PanelNode(p)
         self.panels.append(p)
         self.roots.append(node)
@@ -409,24 +134,79 @@ class SheetMetalModel:
         """
         if name is None:
             name = f'P{len(self.panels)}'
-        p = LoftPanel(profiles=profiles, ruled=ruled, name=name, t=self.t)
+        p = LoftPanel(profiles=profiles, ruled=ruled, name=name)
         node = PanelNode(p)
         self.panels.append(p)
         self.roots.append(node)
         self._node_map[id(p)] = node
         return p
 
-    def extend(self, parent, edge_idx, angle_deg, child_length,
-               bend_dir=+1, start_frac=0.0, end_frac=1.0,
-               blend_r=None, taper='arc', inner_r=None):
-        child, arc = extend_panel(
-            parent, edge_idx, angle_deg, child_length,
-            inner_r=self.inner_r if inner_r is None else inner_r,
-            bend_dir=bend_dir,
-            start_frac=start_frac, end_frac=end_frac,
-            blend_r=blend_r, taper=taper,
+    def pre_extend(self, parent: PolygonPanel | LoftPanel, edge_idx, angle_deg,
+               bend_dir=+1, bend_r=5, start_frac=0.0, end_frac=1.0,
+               blend_r=0.5, blend_mode='arc'):
+        """
+
+        raises ValueError if the edge is occupied by another child panel
+        """
+        if isinstance(parent, LoftPanel) and edge_idx not in LoftPanel._EXTENDABLE_EDGES:
+            raise ValueError(
+                f'LoftPanel only supports extend on profile edges '
+                f'{LoftPanel._EXTENDABLE_EDGES} (root=0, free=2), got {edge_idx}.')
+
+        # transform start_frac and end_frac to length
+        p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
+        # L = parent.edge_length(edge_idx)
+        L = np.linalg.norm(p1_full - p0_full)
+        start_frac_length = start_frac * L
+        end_frac_length   = (1 - end_frac) * L
+        _st = parent.start_idx(edge_idx)
+        _en = parent.end_idx(edge_idx)
+
+        # downgrade edge corner_trim and blend_r if conflicts with the new panel (plus blend_r)
+        # this includes the case without blend_r and corner_trim
+        if start_frac_length - blend_r < parent.corner_trim[_st]:
+            _st_blend_r = 0.5 * start_frac_length
+            parent.corner_trim[_st] = _st_blend_r
+        else:
+            _st_blend_r = blend_r
+        
+        if end_frac_length - blend_r < parent.corner_trim[_en]:
+            _en_blend_r = 0.5 * end_frac_length
+            parent.corner_trim[_en] = _en_blend_r
+        else:
+            _en_blend_r = blend_r
+
+        # TODO: reduce blend_r if conflicts with the new panel
+
+        # check if the edge is occupied (consider the extra blend_r)
+        st_frac_blend = (start_frac_length + _st_blend_r) / L
+        en_frac_blend = 1 - (end_frac_length + _en_blend_r) / L
+        if parent.is_edge_occupied(edge_idx, st_frac_blend, en_frac_blend):
+            raise ValueError(f"Edge {edge_idx} is occupied by another child panel")  
+
+        parent._register_child(edge_idx, st_frac_blend, en_frac_blend)     
+        
+        alpha = np.radians(abs(angle_deg))
+        # Use edge-local normal when available (e.g. LoftPanel has varying normal).
+        N_src = (parent.N_at_edge(edge_idx)
+                if hasattr(parent, 'N_at_edge')
+                else parent.N)
+        bend_dir  = float(bend_dir) * N_src
+
+        # explicitly calculate the arc
+        p0 = p0_full + start_frac * (p1_full - p0_full)
+        p1 = p0_full + end_frac   * (p1_full - p0_full)
+        arc = PartialBendArc(
+            p0=p0, p1=p1,
+            T_in=T_out, W_in=edge_dir, N_bend=bend_dir,
+            alpha=alpha, r_n=bend_r,
+            blend_r=(_st_blend_r, _en_blend_r), blend_mode=blend_mode,
         )
-        parent._register_child(edge_idx, start_frac, end_frac)
+
+        return arc
+
+
+    def register_child(self, parent, edge_idx, child, arc, start_frac, end_frac):
         parent_node = self._node_map[id(parent)]
         child_node  = PanelNode(child, parent=parent_node, edge_idx=edge_idx,
                                 arc=arc, start_frac=start_frac, end_frac=end_frac)
@@ -436,10 +216,33 @@ class SheetMetalModel:
         self.arcs.append(arc)
         return child, arc
 
+
+    def extend(self, parent: PolygonPanel | LoftPanel, edge_idx, angle_deg, child_length, child_corner_r=0.0,
+               bend_dir=+1, bend_r=5, start_frac=0.0, end_frac=1.0,
+               blend_r=0.5, blend_mode='arc'):
+
+        arc = self.pre_extend(parent, edge_idx, angle_deg,
+                              bend_dir=bend_dir, bend_r=bend_r, start_frac=start_frac, end_frac=end_frac,
+                              blend_r=blend_r, blend_mode=blend_mode)
+
+        # Child panel direction ──────
+        child = FlatPanel(
+            origin=arc.p0_out, T=arc.T_out, W=arc.W,
+            length=child_length, width=arc.L,
+            name=f'{parent.name}.e{edge_idx}',
+            corner_r=child_corner_r,
+        )
+        child.corner_trim[0] = 0.0
+        child.corner_trim[1] = 0.0
+        # print("Child panel added at edge", edge_idx, "with origin:", child_origin)
+        self.register_child(parent, edge_idx, child, arc, start_frac, end_frac)
+        return child, arc
+
     def extend_arm(self, parent, edge_idx, angle_deg, free_curve,
-                   bend_dir=+1, start_frac=0.0, end_frac=1.0,
+                   bend_dir=+1, bend_r=0.5, start_frac=0.0, end_frac=1.0,
                    intermediate_curves=None, t_end=None, ruled=False,
-                   panel_type='loft', inner_r=None):
+                   panel_type='loft',
+                   blend_r=0.5, blend_mode='arc'):
         """Extend a LoftPanel or PipePanel child from parent.
 
         Parameters
@@ -454,51 +257,39 @@ class SheetMetalModel:
         t_end              : optional unit tangent override at the free edge
         ruled              : True → ruled; False → smooth (default)
         panel_type         : 'loft' (ThruSections) or 'pipe' (MakePipeShell)
-        inner_r            : inner bend radius override (default: model inner_r)
 
         Returns (child_panel, arc).
         """
-        child, arc = extend_arm(
-            parent, edge_idx, angle_deg, free_curve,
-            inner_r=self.inner_r if inner_r is None else inner_r,
-            bend_dir=bend_dir,
-            start_frac=start_frac, end_frac=end_frac,
-            intermediate_curves=intermediate_curves,
-            t_end=t_end, ruled=ruled, panel_type=panel_type,
-        )
-        parent._register_child(edge_idx, start_frac, end_frac)
-        parent_node = self._node_map[id(parent)]
-        child_node  = PanelNode(child, parent=parent_node, edge_idx=edge_idx,
-                                arc=arc, start_frac=start_frac, end_frac=end_frac)
-        parent_node.children.append(child_node)
-        self._node_map[id(child)] = child_node
-        self.panels.append(child)
-        self.arcs.append(arc)
+        arc = self.pre_extend(parent, edge_idx, angle_deg,
+                        bend_dir=bend_dir, bend_r=bend_r, start_frac=start_frac, end_frac=end_frac,
+                        blend_r=blend_r, blend_mode=blend_mode)
+        
+        root_curve = Curve3D.line(arc.p0_out, arc.p1_out)
+
+        if not isinstance(free_curve, Curve3D):
+            pts = np.asarray(free_curve, float)
+            free_curve = (Curve3D.line(pts[0], pts[1])
+                        if pts.ndim == 2 and len(pts) == 2
+                        else Curve3D('polyline', _pts=pts))
+
+        profiles = ([root_curve]
+                    + (list(intermediate_curves) if intermediate_curves else [])
+                    + [free_curve])
+
+        if t_end is None:
+            a_root, a_free = root_curve.endpoints()[0], free_curve.endpoints()[0]
+            t_end_val = n(a_free - a_root)
+        else:
+            t_end_val = n(np.asarray(t_end, float))
+
+        kwargs = dict(profiles=profiles, t_start=arc.T_out, t_end=t_end_val,
+                    ruled=ruled, name=f'{parent.name}.e{edge_idx}')
+        child = LoftPanel(**kwargs) if panel_type == 'loft' else PipePanel(**kwargs)
+        
+        self.register_child(parent, edge_idx, child, arc, start_frac, end_frac)
         return child, arc
 
-    def extend_loft(self, parent, edge_idx, angle_deg, free_curve,
-                    bend_dir=+1, start_frac=0.0, end_frac=1.0,
-                    intermediate_curves=None, t_end=None, ruled=False,
-                    inner_r=None):
-        """Extend a LoftPanel child (ThruSections).  See extend_arm()."""
-        return self.extend_arm(parent, edge_idx, angle_deg, free_curve,
-                               bend_dir=bend_dir, start_frac=start_frac,
-                               end_frac=end_frac,
-                               intermediate_curves=intermediate_curves,
-                               t_end=t_end, ruled=ruled,
-                               panel_type='loft', inner_r=inner_r)
 
-    def extend_pipe(self, parent, edge_idx, angle_deg, free_curve,
-                    bend_dir=+1, start_frac=0.0, end_frac=1.0,
-                    intermediate_curves=None, t_end=None, ruled=False,
-                    inner_r=None):
-        """Extend a PipePanel child (MakePipeShell).  See extend_arm()."""
-        return self.extend_arm(parent, edge_idx, angle_deg, free_curve,
-                               bend_dir=bend_dir, start_frac=start_frac,
-                               end_frac=end_frac,
-                               intermediate_curves=intermediate_curves,
-                               t_end=t_end, ruled=ruled,
-                               panel_type='pipe', inner_r=inner_r)
 
     def add_recess(self, panel, cx, cy, width, height, corner_r,
                    r_top, r_bot, depth=None, wall_h=None,

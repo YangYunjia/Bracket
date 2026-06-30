@@ -156,7 +156,7 @@ def build_chain_bracket(p):
                      p['p1_l'], p['p1_w'],
                      name='P1', corner_r=p['corner_r_main'])
 
-    a0_root, _, T_mid, W_root, lat_dir = _root_frame(
+    a0_root, b0_root, T_mid, W_root, lat_dir = _root_frame(
         p['p1_l'], p['p1_w'], p['mid_ang'], r_n_b1)
 
     free_curve, intermediates = _loft_profiles(
@@ -167,14 +167,13 @@ def build_chain_bracket(p):
                                free_curve=free_curve,
                                intermediate_curves=intermediates,
                                ruled=False,
-                               inner_r=r_in_b1)
+                               bend_r=r_in_b1)
 
-    p3, _ = m.extend(middle, edge_idx=1,
+    p3, _ = m.extend(middle, edge_idx=2,   # CCW free profile edge on LoftPanel
                      angle_deg=p['p3_ang'],
                      child_length=p['p3_l'],
-                     inner_r=r_in_b2)
-    p3.corner_r = p['corner_r_main']
-    p3._register_child(0, 0.0, 1.0)
+                     child_corner_r=p['corner_r_main'],
+                     bend_r=r_in_b2)
 
     sp1 = _add_small_panel(m, p1,
                            p['sp1_edge'], p['sp1_ang'], p['sp1_len'],
@@ -186,8 +185,8 @@ def build_chain_bracket(p):
                            p['sp3_f0'], p['sp3_f1'],
                            p['sp3_blend'], p['sp3_cr'])
 
-    m.mark_hole(sp1, sp1.length / 2.0, sp1.width / 2.0, label='F1')
-    m.mark_hole(sp3, sp3.length / 2.0, sp3.width / 2.0, label='F3')
+    # m.mark_hole(sp1, sp1.length / 2.0, sp1.width / 2.0, label='F1')
+    # m.mark_hole(sp3, sp3.length / 2.0, sp3.width / 2.0, label='F3')
 
     return m
 
@@ -203,7 +202,7 @@ _BASE = dict(
     p3_ang=90.0, p3_l=80.0,
     corner_r_main=8.0,
     sp1_edge=3, sp1_ang=90.0, sp1_len=28.0,
-    sp1_f0=0.15, sp1_f1=0.85, sp1_blend=8.0, sp1_cr=5.0,
+    sp1_f0=0.3, sp1_f1=0.85, sp1_blend=8.0, sp1_cr=5.0,
     sp3_edge=3, sp3_ang=90.0, sp3_len=28.0,
     sp3_f0=0.15, sp3_f1=0.85, sp3_blend=8.0, sp3_cr=5.0,
 )
@@ -222,7 +221,7 @@ SAMPLES1 = [
          _prof(43, shift_lat=15),
          _prof(100)],
         mid_ang=30.0,
-        sp1_edge=0, sp1_f0=0.1, sp1_f1=0.9,
+        sp1_edge=0, sp1_f0=0.05, sp1_f1=0.8,
         sp3_edge=1, sp3_f0=0.1, sp3_f1=0.9)),
 ]
 
