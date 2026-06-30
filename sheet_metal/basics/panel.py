@@ -65,6 +65,14 @@ class FlatPanel:
         self.corner_r    = float(corner_r)
         self._edge_spans = {}   # edge_idx → [(start_frac, end_frac), ...]
 
+    @property
+    def vertices(self):
+        return np.array([[0, 0], [self.length, 0], [self.length, self.width], [0, self.width]], float)
+
+    @property
+    def num_edges(self):
+        return 4
+
     def _register_child(self, edge_idx, start_frac=0.0, end_frac=1.0):
         """Record a child panel spanning [start_frac, end_frac] on this edge.
 

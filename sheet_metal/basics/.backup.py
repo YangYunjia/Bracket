@@ -373,3 +373,69 @@ class CurvedBendArc:
 
 
 '''
+
+
+
+'''
+def _curved_bend_arc_occ(arc, n_arc=24):
+    """Arc-guided loft for CurvedBendArc.
+
+    Source edge (a=0)   : the curved parent B-spline edge.
+    Target edge (a=alpha): the straight root edge of the flat child panel.
+
+    The child panel root edge lies along W_child = the chord direction of the
+    parent edge.  extend_panel computes child_width = dot(q_end − c0, W_child),
+    projecting out any perpendicular component of the arc endpoint.  We must
+    do the same projection here so the loft terminates exactly at the child
+    panel root edge with no gap.
+    """
+    try:
+        n_e  = min(arc.n_edge, 32)
+        grid = arc._build_grid()           # (n_a+1, n_e+1, 3)
+
+        # W_child = chord direction of the parent edge (= W_child in extend_panel)
+        pT  = np.array(arc.panel_T,      float)
+        pW  = np.array(arc.panel_W,      float)
+        uv0 = arc.edge_curve.eval(0.0)
+        uv1 = arc.edge_curve.eval(1.0)
+        p0_3d   = np.array(arc.panel_origin, float) + uv0[0]*pT + uv0[1]*pW
+        p1_3d   = np.array(arc.panel_origin, float) + uv1[0]*pT + uv1[1]*pW
+        W_child = n(p1_3d - p0_3d)      # chord direction = child panel W axis
+
+        if grid.shape[1] != n_e + 1:
+            pts_uv     = arc.edge_curve.sample_arclength(n_e + 1)
+            parent_pts = np.array([np.array(arc.panel_origin, float)
+                                    + uv[0]*pT + uv[1]*pW for uv in pts_uv])
+            ts_al  = np.linspace(0.0, 1.0, n_e + 1)
+            tangs  = arc.edge_curve.tangent(ts_al)
+            Nb     = n(arc.N_bend)
+            r_n    = arc.r_n
+            alpha  = arc.alpha
+            T_outs = np.array([n(t[1]*pT - t[0]*pW) for t in tangs])
+            C_js   = parent_pts + r_n * Nb
+            arc_child = C_js + r_n * (-np.cos(alpha)*Nb + np.sin(alpha)*T_outs)
+            c0 = arc_child[0]
+            c1_raw = arc_child[-1]
+        else:
+            parent_pts = grid[0, :, :]
+            c0     = grid[-1,  0, :]
+            c1_raw = grid[-1, -1, :]
+
+        # Project c1 onto the child root edge line (through c0 along W_child).
+        # This mirrors extend_panel's child_width = dot(q_end − c0, W_child)
+        # and ensures c1 lands exactly at the child panel far-end vertex.
+        span = float(np.dot(c1_raw - c0, W_child))
+        c1   = c0 + span * W_child
+
+        ts        = np.linspace(0.0, 1.0, n_e + 1)
+        child_pts = c0 + ts[:, np.newaxis] * (c1 - c0)
+
+        result = _arc_loft_occ(parent_pts, child_pts,
+                                arc.N_bend, arc.alpha, arc.r_n, n_arc=n_arc)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+
+    return _compound_from_face_lists(arc.faces())
+'''

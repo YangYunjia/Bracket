@@ -52,8 +52,9 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from sheet_metal.rendering.occ_model import OCC_BracketModel
+from sheet_metal.rendering.occ_model import OCC_Renderer
 from sheet_metal.basics.panel import Curve3D
+from sheet_metal.basics.model import SheetMetalModel
 
 OUT      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output_chain')
 STEP_OUT = os.path.join(OUT, 'step')
@@ -150,8 +151,7 @@ def build_chain_bracket(p):
     r_in_b2 = float(p.get('inner_r_b2', r_in))
     r_n_b1  = r_in_b1 + thick / 2.0
 
-    m = OCC_BracketModel(t=thick, inner_r=r_in)
-
+    m = SheetMetalModel(t=thick, inner_r=r_in)
     p1 = m.add_panel([0, 0, 0], [1, 0, 0], [0, 1, 0],
                      p['p1_l'], p['p1_w'],
                      name='P1', corner_r=p['corner_r_main'])
@@ -192,26 +192,6 @@ def build_chain_bracket(p):
     return m
 
 
-# ── render / save helper ──────────────────────────────────────────────────────
-
-def save(m, name, title):
-    fig = plt.figure(figsize=(14, 5))
-    for i, (elev, azim, label) in enumerate(VIEWS, 1):
-        ax = fig.add_subplot(1, 3, i, projection='3d')
-        m.render(ax, elev=elev, azim=azim)
-        ax.set_title(label, fontsize=9)
-    fig.suptitle(f'[ChainBracket] {title}', fontsize=10)
-    plt.tight_layout()
-    path = os.path.join(OUT, f'{name}.png')
-    plt.savefig(path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-
-    step_path = os.path.join(STEP_OUT, f'{name}.step')
-    ok  = m.export_step(step_path)
-    tag = 'step✓' if ok else 'step!'
-    print(f'  {name}.png  [{tag}]')
-
-
 # ── sample parameter sets ─────────────────────────────────────────────────────
 
 _BASE = dict(
@@ -234,6 +214,17 @@ def _s(**kw):
     d.update(kw)
     return d
 
+SAMPLES1 = [
+    ('chain_01_basic',
+     'C-curve middle — 15 mm lateral bow at mid profile',
+     _s(mid_profiles=[
+         _prof(22),
+         _prof(43, shift_lat=15),
+         _prof(100)],
+        mid_ang=30.0,
+        sp1_edge=0, sp1_f0=0.1, sp1_f1=0.9,
+        sp3_edge=1, sp3_f0=0.1, sp3_f1=0.9)),
+]
 
 SAMPLES = [
     ('chain_01_basic',
@@ -425,13 +416,28 @@ SAMPLES = [
 
 
 if __name__ == '__main__':
-    print(f'Generating {len(SAMPLES)} chain bracket samples…')
-    for name, title, params in SAMPLES:
-        try:
-            m = build_chain_bracket(params)
-            save(m, name, title)
-        except Exception as e:
-            import traceback
-            print(f'  ERROR {name}: {e}')
-            traceback.print_exc()
+    sample_set = SAMPLES1
+    print(f'Generating {len(sample_set)} chain bracket samples…')
+    renderer = OCC_Renderer()
+
+    for name, title, params in sample_set:
+        m = build_chain_bracket(params)
+        groups, markers = renderer.render(m)
+        fig = plt.figure(figsize=(14, 5))
+
+        for i, (elev, azim, label) in enumerate(VIEWS, 1):
+            ax = fig.add_subplot(1, 3, i, projection='3d')
+            renderer.export_plot(groups, markers, ax=ax, elev=elev, azim=azim)
+            ax.set_title(label, fontsize=9)
+        fig.suptitle(f'[ChainBracket] {title}', fontsize=10)
+        plt.tight_layout()
+        path = os.path.join(OUT, f'{name}.png')
+        plt.savefig(path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+        step_path = os.path.join(STEP_OUT, f'{name}.step')
+        ok  = renderer.export_step(groups, step_path)
+        tag = 'step✓' if ok else 'step!'
+        print(f'  {name}.png  [{tag}]')
+
     print('Done →', OUT)

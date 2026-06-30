@@ -16,15 +16,12 @@ Quality parameters accepted by render():
 """
 
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
-from ..basics.model import SheetMetalModel
-
-from ..basics.maths import n, signed_area2, pt_in_tri
+from ..basics.maths import signed_area2, pt_in_tri
 from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel
 from ..basics.bending import BendArc, PartialBendArc
 from ..basics.recess import StampedRecess, PolygonRecess
+
+from .basics import BaseRenderer
 
 
 def _ear_clip(verts):
@@ -165,7 +162,7 @@ def _rounded_polygon_pts(vertices, radii, n_arc=12):
 
     return result
 
-class NumpyBracketModel(SheetMetalModel):
+class NumpyBracketModel(BaseRenderer):
     """SheetMetalModel + numpy/matplotlib rendering.
 
     Identical builder API to SheetMetalModel.  render() accepts optional
@@ -319,63 +316,4 @@ class NumpyBracketModel(SheetMetalModel):
             return obj.faces(n_boundary=self.n_boundary, n_profile=self.n_profile)
         raise ValueError(f'Unknown recess type: {type(obj)}')
 
-
-    def render(self, ax=None,
-               color_panel='#4a90c4', color_bend='#2e6ea6',
-               color_recess='#3a7abf',
-               alpha_surf=0.85, ec='#1a3a52', lw=0.4,
-               elev=28., azim=-50.):
-        """Render the model with matplotlib.
-
-        Quality parameters (all optional):
-          n_arc_bend, n_arc_partial, n_blend, n_sample,
-          n_curve, n_boundary, n_profile — see module docstring.
-        """
-        if ax is None:
-            fig = plt.figure(figsize=(10, 8))
-            ax  = fig.add_subplot(111, projection='3d')
-
-        for p in self.panels:
-            ax.add_collection3d(Poly3DCollection(
-                self.render_panel(p), alpha=alpha_surf,
-                facecolor=color_panel, edgecolor=ec, linewidth=lw))
-
-        for arc in self.arcs:
-            ax.add_collection3d(Poly3DCollection(
-                self.render_arc(arc), alpha=alpha_surf,
-                facecolor=color_bend, edgecolor=ec, linewidth=lw))
-
-        for rec in self.recesses:
-            ax.add_collection3d(Poly3DCollection(
-                self.render_recess(rec), alpha=alpha_surf,
-                facecolor=color_recess, edgecolor=ec, linewidth=lw))
-
-        hole_colors = ['#d62728', '#2ca02c', '#9467bd', '#ff7f0e']
-        for i, h in enumerate(self._holes):
-            c, ctr, n, r = hole_colors[i % 4], h['centre'], h['normal'], h['r']
-            ref = np.array([0, 1, 0]) if abs(n[1]) < 0.85 else np.array([1, 0, 0])
-            u_ = n(np.cross(n, ref))
-            v_ = n(np.cross(n, u_))
-            ang  = np.linspace(0, 2 * np.pi, 48)
-            ring = ctr + r * (np.outer(np.cos(ang), u_) + np.outer(np.sin(ang), v_))
-            ax.plot(ring[:, 0], ring[:, 1], ring[:, 2], color=c, lw=2.2, zorder=10)
-            ax.quiver(*ctr, *(n * r * 1.5), color=c, lw=1.8,
-                      arrow_length_ratio=0.35, zorder=10)
-            ax.text(*(ctr + n * r * 2.5), h['label'],
-                    fontsize=10, color=c, fontweight='bold')
-
-        # all_pts = ([pt for p   in self.panels   for f in _get_faces(p,   **q) for pt in f] +
-        #            [pt for arc in self.arcs     for f in _get_faces(arc, **q) for pt in f] +
-        #            [pt for rec in self.recesses for f in _get_faces(rec, **q) for pt in f])
-        # if all_pts:
-        #     pts   = np.array(all_pts)
-        #     lo, hi = pts.min(0), pts.max(0)
-        #     mid   = (lo + hi) / 2
-        #     span  = max((hi - lo).max() * 0.65, 1.0)
-        #     for fn, m in zip([ax.set_xlim, ax.set_ylim, ax.set_zlim], mid):
-        #         fn(m - span, m + span)
-
-        ax.set_xlabel('X (mm)'); ax.set_ylabel('Y (mm)'); ax.set_zlabel('Z (mm)')
-        ax.set_box_aspect([1, 1, 1])
-        ax.view_init(elev=elev, azim=azim)
-        return ax
+   
