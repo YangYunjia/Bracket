@@ -163,10 +163,18 @@ def extend_panel(parent, edge_idx, angle_deg, child_length,
 
     if is_partial:
         _br = float(blend_r) if blend_r is not None else r_n
+        s0  = start_frac * L_edge
+        s1  = end_frac   * L_edge
+        # Cap blend to the available flat-edge space on each partial side so
+        # the root touches the flat-edge boundary at a=0 without a wide
+        # constant-width section (which would look like an extra rectangle).
+        if start_frac > 1e-6 and s0 < _br:
+            _br = s0
+        if end_frac < 1.0 - 1e-6 and (L_edge - s1) < _br:
+            _br = L_edge - s1
         arc = PartialBendArc(
             p0_full=p0_full, p1_full=p1_full,
-            s_start=start_frac * L_edge,
-            s_end=end_frac     * L_edge,
+            s_start=s0, s_end=s1,
             T_out=T_out, N_bend=bdir,
             alpha=alpha, r_n=r_n,
             blend_r=_br, taper=taper,
@@ -268,12 +276,19 @@ def extend_arm(parent, edge_idx, angle_deg, free_curve,
 
     is_partial = (start_frac > 1e-6) or (end_frac < 1.0 - 1e-6)
     if is_partial:
+        _br = r_n
+        s0  = start_frac * L_edge
+        s1  = end_frac   * L_edge
+        if start_frac > 1e-6 and s0 < _br:
+            _br = s0
+        if end_frac < 1.0 - 1e-6 and (L_edge - s1) < _br:
+            _br = L_edge - s1
         arc = PartialBendArc(
             p0_full=p0_full, p1_full=p1_full,
-            s_start=start_frac * L_edge,
-            s_end=end_frac     * L_edge,
+            s_start=s0, s_end=s1,
             T_out=T_out, N_bend=bdir,
             alpha=alpha, r_n=r_n,
+            blend_r=_br,
         )
     else:
         arc = BendArc(p0=p0, p1=p1, T_out=T_out, N_bend=bdir,
