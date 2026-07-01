@@ -139,6 +139,15 @@ class FlatPanel(PolygonPanel):
     """Flat rectangular panel (mid-surface only).
     The panel lives in the plane spanned by T and W from origin.
 
+        T
+        |
+        3 --- (2) ---> 2
+        |              |
+    v  (3)            (1)
+        |              |
+        0 --- (0) ---> 1 -> W
+               u
+
     attributes:
         origin : 3-D anchor point
         T, W   : two orthogonal 3-D vectors spanning the panel plane
