@@ -6,11 +6,12 @@ import numpy as np
 
 from .maths import n
 from .curve import Curve3D
-from .panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel
+from .panel import Panel, FlatPanel, PolygonPanel, LoftPanel, PipePanel
 from .bending import PartialBendArc
 from .tree import PanelNode
 from .recess import StampedRecess, PolygonRecess
 
+from typing import List
 
 class SheetMetalModel:
     """Incrementally built sheet-metal mid-surface model.
@@ -28,47 +29,22 @@ class SheetMetalModel:
     def __init__(self, t=2.0, inner_r=5.0):
         self.t         = float(t)
         self.inner_r   = float(inner_r)
-        self.panels    = []        # all FlatPanel objects in insertion order
-        self.arcs      = []        # all arc objects in insertion order
-        self.recesses  = []        # all StampedRecess objects
+        self.panels: List[Panel]    = []        # all FlatPanel objects in insertion order
+        self.arcs: List[PartialBendArc]      = []        # all arc objects in insertion order
+        self.recesses: List[StampedRecess | PolygonRecess]  = []        # all StampedRecess objects
         self._holes    = []
         self.roots     = []        # root PanelNodes (one per add_panel call)
         self._node_map = {}        # id(FlatPanel) → PanelNode
 
-    def add_panel(self, origin, T, W, length, width, name=None, corner_r=0.0):
-        if name is None:
-            name = f'P{len(self.panels)}'
-        p = FlatPanel(origin, T, W, length, width, name, corner_r=corner_r)
+    def add_panel(self, name, origin, T, W, length, width, corner_r=0.0):
+        p = FlatPanel(name, origin, T, W, length, width, corner_r=corner_r)
         node = PanelNode(p)
         self.panels.append(p)
         self.roots.append(node)
         self._node_map[id(p)] = node
         return p
 
-    # def add_spline_panel(self, origin, T, W, vertices, edge_curves=None,
-    #                      name=None, corner_r=0.0):
-    #     """Add a flat panel whose edges can be B-spline curves.
-
-    #     origin      : 3-D position of the panel coordinate origin
-    #     T, W        : two orthogonal 3-D vectors spanning the panel plane
-    #     vertices    : (N, 2) list/array of (u, v) corners in the T-W local frame
-    #     edge_curves : list of N items (BSplineEdge | None); None = straight edge
-    #     name        : optional label
-    #     corner_r    : rounding radius at free straight-edge corners
-
-    #     Returns the SplinePanel.
-    #     """
-    #     if name is None:
-    #         name = f'P{len(self.panels)}'
-    #     p = SplinePanel(origin, T, W, vertices, edge_curves,
-    #                     self.t, name, corner_r=corner_r)
-    #     node = PanelNode(p)
-    #     self.panels.append(p)
-    #     self.roots.append(node)
-    #     self._node_map[id(p)] = node
-    #     return p
-
-    def add_polygon_panel(self, origin, T, W, vertices, name=None, corner_r=0.0):
+    def add_polygon_panel(self, name, origin, T, W, vertices, corner_r=0.0):
         """Add a flat panel with an arbitrary polygon outline.
 
         origin   : 3-D position of the panel coordinate origin
@@ -80,16 +56,14 @@ class SheetMetalModel:
         Returns the PolygonPanel.  Use m.extend(panel, edge_idx, …) to grow
         child panels from any polygon edge.
         """
-        if name is None:
-            name = f'P{len(self.panels)}'
-        p = PolygonPanel(origin, T, W, vertices, self.t, name, corner_r=corner_r)
+        p = PolygonPanel(name, origin, T, W, vertices, corner_r=corner_r)
         node = PanelNode(p)
         self.panels.append(p)
         self.roots.append(node)
         self._node_map[id(p)] = node
         return p
 
-    def add_loft_panel(self, profiles, ruled=True, name=None):
+    def add_loft_panel(self, name, profiles, ruled=True):
         """Add a standalone LoftPanel (not connected to an existing panel).
 
         profiles : list of Curve3D or [(x,y,z),(x,y,z)] pairs
@@ -100,7 +74,7 @@ class SheetMetalModel:
         """
         if name is None:
             name = f'P{len(self.panels)}'
-        p = LoftPanel(profiles=profiles, ruled=ruled, name=name)
+        p = LoftPanel(name, profiles, ruled=ruled)
         node = PanelNode(p)
         self.panels.append(p)
         self.roots.append(node)
@@ -109,7 +83,8 @@ class SheetMetalModel:
 
     def extend_bend(self, parent: PolygonPanel | LoftPanel, edge_idx, angle_deg,
                bend_dir=+1, bend_r=5, start_frac=0.0, end_frac=1.0,
-               blend_r=0.5, blend_mode='arc') -> PartialBendArc:
+               blend_r=0.5, blend_mode='arc',
+               child_name='0') -> PartialBendArc:
         """
         Extend a panel from an edge via a bend arc.
 
@@ -124,7 +99,7 @@ class SheetMetalModel:
         end_frac : float (without the blend_r)
         blend_r : float (blend radius on each side of the edge)
         blend_mode : str (blend mode, 'arc' or 'linear')
-
+        child_name : str (name of the child panel)
         Returns
         -------
         arc : PartialBendArc
@@ -179,7 +154,7 @@ class SheetMetalModel:
         p0 = p0_full + start_frac * (p1_full - p0_full)
         p1 = p0_full + end_frac   * (p1_full - p0_full)
         arc = PartialBendArc(
-            p0=p0, p1=p1,
+            name=f'{parent.name}-{child_name}-arc', p0=p0, p1=p1,
             T_in=T_out, W_in=edge_dir, N_bend=bend_dir,
             alpha=alpha, r_n=bend_r,
             blend_r=(_st_blend_r, _en_blend_r), blend_mode=blend_mode,
@@ -201,15 +176,19 @@ class SheetMetalModel:
                child_length=10.0, child_corner_r=0.0,
                free_curve=None, intermediate_curves=None, t_end=None, ruled=False,
                bend_dir=+1, bend_r=5, start_frac=0.0, end_frac=1.0,
-               blend_r=0.5, blend_mode='arc'):
+               blend_r=0.5, blend_mode='arc', 
+               name=None):
+            
+        if name is None:
+            name = f'{parent.name}.e{edge_idx}'
 
         arc = self.extend_bend(parent, edge_idx, angle_deg,
                               bend_dir=bend_dir, bend_r=bend_r, start_frac=start_frac, end_frac=end_frac,
-                              blend_r=blend_r, blend_mode=blend_mode)
+                              blend_r=blend_r, blend_mode=blend_mode, child_name=name)
         if panel_type == 'flat':
-            child = self.extend_flat_panel(f'{parent.name}.e{edge_idx}', arc, child_length, child_corner_r)
+            child = self.extend_flat_panel(name, arc, child_length, child_corner_r)
         elif panel_type in ['loft', 'pipe']:
-            child = self.extend_loft_panel(f'{parent.name}.e{edge_idx}', arc, free_curve, intermediate_curves, t_end, ruled)
+            child = self.extend_loft_panel(name, arc, free_curve, intermediate_curves, t_end, ruled)
         else:
             raise ValueError(f"Invalid panel type: {panel_type}")
 
@@ -221,9 +200,9 @@ class SheetMetalModel:
 
         # Child panel direction ──────
         child = FlatPanel(
+            name=name,
             origin=arc.p0_out, T=arc.T_out, W=arc.W,
             length=child_length, width=arc.L,
-            name=name,
             corner_r=child_corner_r,
         )
         child.corner_trim[0] = 0.0
@@ -269,8 +248,8 @@ class SheetMetalModel:
         else:
             t_end_val = n(np.asarray(t_end, float))
 
-        kwargs = dict(profiles=profiles, t_start=arc.T_out, t_end=t_end_val,
-                    ruled=ruled, name=name)
+        kwargs = dict(name=name, profiles=profiles, t_start=arc.T_out, t_end=t_end_val,
+                    ruled=ruled)
         child = LoftPanel(**kwargs) if panel_type == 'loft' else PipePanel(**kwargs)
         
         child.corner_trim[0] = 0.0

@@ -112,10 +112,12 @@ def _profile_curve(origin, _T, _N, _W, root_width, spec):
 
 
 def _add_small_panel(m: SheetMetalModel, parent: Panel, edge_idx: int, angle_deg: float, arm_len: float,
-                     f0, f1, blend_r, corner_r) -> FlatPanel:
+                     f0, f1, blend_r, corner_r, name=None) -> FlatPanel:
+    if name is None:
+        name = f'{parent.name}.e{edge_idx}.SP'
     sp, _ = m.extend(parent, edge_idx, angle_deg, panel_type='flat',
                      child_length=arm_len, child_corner_r=corner_r,
-                     start_frac=f0, end_frac=f1, blend_r=blend_r)
+                     start_frac=f0, end_frac=f1, blend_r=blend_r, name=name)
     return sp
 
 
@@ -127,16 +129,16 @@ def build_chain_bracket(p):
     bend_r2 = float(p['bend_r2'])
 
     m = SheetMetalModel()
-    p1 = m.add_panel([0, 0, 0], [1, 0, 0], [0, 1, 0],
+    p1 = m.add_panel('P1', [0, 0, 0], [1, 0, 0], [0, 1, 0],
                      p['p1_l'], p['p1_w'],
-                     name='P1', corner_r=p['corner_r_main'])
+                     corner_r=p['corner_r_main'])
 
-    arc1 = m.extend_bend(p1, edge_idx=1, angle_deg=p['mid_ang'], bend_r=bend_r1)
+    arc1 = m.extend_bend(p1, edge_idx=1, angle_deg=p['mid_ang'], bend_r=bend_r1, child_name='MID')
 
     curves = [_profile_curve(origin=0.5 * (arc1.p0_out + arc1.p1_out), _T=arc1.T_out, _N=arc1.N_out, _W=arc1.W, root_width=arc1.L, spec=s)
               for s in p['mid_profiles']]
 
-    middle = m.extend_loft_panel('middle', arc1, panel_type='loft',
+    middle = m.extend_loft_panel('MID', arc1, panel_type='loft',
                                free_curve=curves[-1],
                                intermediate_curves=curves[:-1],
                                ruled=False)
@@ -147,20 +149,26 @@ def build_chain_bracket(p):
                      panel_type='flat',
                      child_length=p['p3_l'],
                      child_corner_r=p['corner_r_main'],
-                     bend_r=bend_r2)
+                     bend_r=bend_r2,
+                     name='P2')
 
-    sp1 = _add_small_panel(m, p1,
-                           p['sp1_edge'], p['sp1_ang'], p['sp1_len'],
-                           p['sp1_f0'], p['sp1_f1'],
-                           p['sp1_blend'], p['sp1_cr'])
+    if p['sp1_edge'] is not None:
+        sp1 = _add_small_panel(m, p1,
+                               p['sp1_edge'], p['sp1_ang'], p['sp1_len'],
+                               p['sp1_f0'], p['sp1_f1'],
+                               p['sp1_blend'], p['sp1_cr'])
+        m.mark_hole(sp1, sp1.length / 2.0, sp1.width / 2.0, label='F1')
+    else:
+        sp1 = None
 
-    sp3 = _add_small_panel(m, p3,
-                           p['sp3_edge'], p['sp3_ang'], p['sp3_len'],
-                           p['sp3_f0'], p['sp3_f1'],
-                           p['sp3_blend'], p['sp3_cr'])
-
-    m.mark_hole(sp1, sp1.length / 2.0, sp1.width / 2.0, label='F1')
-    m.mark_hole(sp3, sp3.length / 2.0, sp3.width / 2.0, label='F3')
+    if p['sp3_edge'] is not None:
+        sp3 = _add_small_panel(m, p3,
+                               p['sp3_edge'], p['sp3_ang'], p['sp3_len'],
+                               p['sp3_f0'], p['sp3_f1'],
+                               p['sp3_blend'], p['sp3_cr'])
+        m.mark_hole(sp3, sp3.length / 2.0, sp3.width / 2.0, label='F3')
+    else:
+        sp3 = None
 
     return m
 
@@ -187,6 +195,14 @@ def _s(**kw):
     return d
 
 SAMPLES1 = [
+    ('00_only_backbone',
+     '',
+     _s(p1_w=100, mid_profiles=[
+         _prof(100),
+         _prof(250),
+         _prof(400)],
+        mid_ang=30.0,
+        sp1_edge=None, sp3_edge=None)),
     ('chain_01_basic',
      'C-curve middle — 15 mm lateral bow at mid profile',
      _s(p1_w=100, mid_profiles=[
@@ -195,17 +211,20 @@ SAMPLES1 = [
          _prof(400, twist2=10)],
         mid_ang=30.0,
         sp1_edge=0, sp1_f0=0.05, sp1_f1=0.8,
-        sp3_edge=1, sp3_f0=0.1, sp3_f1=0.9)),
+        sp3_edge=1, sp3_f0=0.4, sp3_f1=0.6)),
 ]
 
 if __name__ == '__main__':
     sample_set = SAMPLES1
     print(f'Generating {len(sample_set)} chain bracket samples…')
     renderer = OCC_Renderer()
+    tessellateds = {}
 
     for name, title, params in sample_set:
         m = build_chain_bracket(params)
         groups, markers = renderer.render(m)
+        tessellated = renderer.export_tessellated(groups)
+        tessellateds[name] = tessellated
         fig = plt.figure(figsize=(14, 5))
 
         for i, (elev, azim, label) in enumerate(VIEWS, 1):
@@ -218,9 +237,13 @@ if __name__ == '__main__':
         plt.savefig(path, dpi=150, bbox_inches='tight')
         plt.close(fig)
 
-        step_path = os.path.join(STEP_OUT, f'{name}.step')
-        ok  = renderer.export_step(groups, step_path)
+        step_path = os.path.join(STEP_OUT, f'{name}')
+        ok  = renderer.export_step(groups, step_path + '.step')
+        ok  = renderer.export_stl(groups, step_path + '.stl')
         tag = 'step✓' if ok else 'step!'
         print(f'  {name}.png  [{tag}]')
+
+    # save the tessellated dictionaries to a single file
+    np.savez(os.path.join(OUT, 'tessellated.npz'), tessellateds)
 
     print('Done →', OUT)

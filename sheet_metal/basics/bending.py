@@ -25,10 +25,11 @@ class PartialBendArc:
     (n_arc × n_blend) quad grid.
     """
 
-    def __init__(self, p0, p1,
+    def __init__(self, name, p0, p1,
                  T_in, W_in, N_bend,
                  alpha, r_n,
                  blend_r, blend_mode='arc'):
+        self.name   = name
         self.p0     = np.asarray(p0, float)
         self.p1     = np.asarray(p1, float)
 
@@ -65,5 +66,5 @@ class BendArc(PartialBendArc):
     
     """
 
-    def __init__(self, p0, p1, T_in, W_in, N_bend, alpha, r_n):
-        super().__init__(p0, p1, T_in, W_in, N_bend, alpha, r_n, blend_r=0.0, blend_mode='linear')
+    def __init__(self, name, p0, p1, T_in, W_in, N_bend, alpha, r_n):
+        super().__init__(name, p0, p1, T_in, W_in, N_bend, alpha, r_n, blend_r=0.0, blend_mode='linear')

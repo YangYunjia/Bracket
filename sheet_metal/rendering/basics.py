@@ -59,9 +59,9 @@ class BaseRenderer:
     @abstractmethod
     def render(self, model: SheetMetalModel, **kwargs):
         groups = {
-            'panels': [self.render_panel(p) for p in model.panels],
-            'arcs': [self.render_arc(a) for a in model.arcs],
-            'recesses': [self.render_recess(r) for r in model.recesses],
+            'panels': {p.name: self.render_panel(p) for p in model.panels},
+            'arcs': {a.name: self.render_arc(a) for a in model.arcs},
+            'recesses': {r.name: self.render_recess(r) for r in model.recesses},
         }
         markers = {
             'holes': model._holes,
@@ -81,7 +81,7 @@ class BaseRenderer:
 
         all_pts = []
         for group, objects in groups.items():
-            for obj in objects:
+            for name, obj in objects.items():
                 ax.add_collection3d(Poly3DCollection(
                     obj, alpha=self.alpha_surf,
                     facecolor=self.group_colors[group], edgecolor=self.edge_color, linewidth=self.lw))

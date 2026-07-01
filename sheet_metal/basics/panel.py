@@ -26,7 +26,7 @@ class PolygonPanel:
                not connected to child panels).  0 = sharp everywhere.
     """
 
-    def __init__(self, origin, T, W, vertices, name='P', corner_r=0.0):
+    def __init__(self, name, origin, T, W, vertices, corner_r=0.0):
         """
         Parameters
         ----------
@@ -150,13 +150,13 @@ class FlatPanel(PolygonPanel):
     """
 
 
-    def __init__(self, origin, T, W, length, width, name='F',
+    def __init__(self, name, origin, T, W, length, width,
                  corner_r=0.0):
 
         self.length = float(length)
         self.width = float(width)
         vertices = np.array([[0.0, 0.0], [length, 0.0], [length, width], [0.0, width]])
-        super().__init__(origin, T, W, vertices, name, corner_r)
+        super().__init__(name, origin, T, W, vertices, corner_r)
 
 
 # ── LoftPanel ─────────────────────────────────────────────────────────────────
@@ -186,8 +186,8 @@ class LoftPanel:
 
     _EXTENDABLE_EDGES = (0, 2)
 
-    def __init__(self, profiles, t_start=None, t_end=None,
-                 spine_pts=None, ruled=False, name='LP'):
+    def __init__(self, name, profiles, t_start=None, t_end=None,
+                 spine_pts=None, ruled=False):
         """
         Parameters
         ----------
@@ -331,8 +331,8 @@ class PipePanel:
     Edge numbering: identical to LoftPanel (0=root, 1=free, 2/3=long sides).
     """
 
-    def __init__(self, profiles, t_start=None, t_end=None,
-                 spine_pts=None, ruled=False, name='PP', t=2.0):
+    def __init__(self, name, profiles, t_start=None, t_end=None,
+                 spine_pts=None, ruled=False):
         if len(profiles) < 2:
             raise ValueError('PipePanel needs at least 2 profiles.')
 
@@ -349,7 +349,6 @@ class PipePanel:
         self.profiles    = [_coerce(p) for p in profiles]
         self.ruled       = bool(ruled)
         self.name        = str(name)
-        self.t           = float(t)
         self._edge_spans = {}
 
         self.t_start = n(np.asarray(t_start, float)) if t_start is not None else None

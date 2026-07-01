@@ -28,7 +28,6 @@ STEP export produces compact, exact B-Rep files.
 """
 
 import numpy as np
-
 from ..basics.maths import n
 from .basics import BaseRenderer
 from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel
@@ -62,6 +61,7 @@ from OCC.Core.TopoDS import TopoDS_Compound, topods
 from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
 from OCC.Core.IFSelect import IFSelect_RetDone
 
+from typing import Dict, Optional
 
 
 # ─── geometry helpers ─────────────────────────────────────────────────────────
@@ -778,22 +778,63 @@ class OCC_Renderer(BaseRenderer):
         elif isinstance(rec, PolygonRecess): return _polygon_recess_occ(rec)
         else: raise ValueError(f'Unknown recess type: {type(rec)}')
 
-    def export_plot(self, groups: dict, markers: dict, ax=None, elev=28., azim=-50.):
-        """Export the model to a matplotlib plot.
+
+    def tessellate_shapes(self, groups: dict) -> dict:
+
+        """Tessellate all shapes in the groups.
         """
         tessellated = {}
         for group, shapes in groups.items():
-            tessellated[group] = []
-            for shape in shapes:
-                tessellated[group].append(self.tessellate(shape))
+            tessellated[group] = {}
+            for name, shape in shapes.items():
+                tessellated[group][name] = self.tessellate(shape)
+        return tessellated
 
-        super().export_plot(tessellated, markers, ax=ax, elev=elev, azim=azim)
+
+    def export_plot(self, groups: dict, markers: dict, ax=None, elev=28., azim=-50.):
+        """Export the model to a matplotlib plot.
+        """
+        super().export_plot(self.tessellate_shapes(groups), markers, ax=ax, elev=elev, azim=azim)
+
+    def export_tessellated(self, groups: dict, filepath: Optional[str] = None) -> Dict[str, np.ndarray]:
+        """Export the model to a tessellated file.
+        """
+        tessellated = self.tessellate_shapes(groups)
+        # flatten the tessellated dictionary
+        tessellated = {k: v for d in tessellated.values() for k, v in d.items()}
+        if filepath is not None:
+            np.savez(filepath, **tessellated)
+        return tessellated
 
     def export_step(self, groups: dict, filepath: str) -> None:
         """Export all shapes to a STEP AP203 file.  Returns True on success.
         """
         writer = STEPControl_Writer()
         for group, shapes in groups.items():
-            for shape in shapes:
+            for name, shape in shapes.items():
                 writer.Transfer(shape, STEPControl_AsIs)
         writer.Write(str(filepath)) == IFSelect_RetDone
+
+    def export_stl(self, groups: dict, filepath: str) -> None:
+        """Export all shapes to a STL file.
+        """
+        # Iterate over all shapes in the provided groups and export them as STL.
+        from OCC.Core.StlAPI import StlAPI_Writer
+
+        from OCC.Core.TopoDS import TopoDS_Compound
+        from OCC.Core.BRep import BRep_Builder
+
+        writer = StlAPI_Writer()
+        writer.SetASCIIMode(False)  # Use binary STL for compactness; set True for ASCII
+
+        # Create a compound and add all shapes to it
+        compound = TopoDS_Compound()
+        builder = BRep_Builder()
+        builder.MakeCompound(compound)
+        for shapes in [groups['arcs'], groups['panels']]:
+        # for group, shapes in groups.items():
+            for name, shape in shapes.items():
+                builder.Add(compound, shape)
+        # Write the compound with all shapes to a single STL file
+        writer.Write(compound, str(filepath))
+       
