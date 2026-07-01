@@ -133,7 +133,7 @@ def build_chain_bracket(p):
                      p['p1_l'], p['p1_w'],
                      corner_r=p['corner_r_main'])
 
-    arc1 = m.extend_bend(p1, edge_idx=1, angle_deg=p['mid_ang'], bend_r=bend_r1, child_name='MID')
+    arc1 = m.extend_bend(p1, edge_idx=2, angle_deg=p['mid_ang'], bend_r=bend_r1, child_name='MID')
 
     curves = [_profile_curve(origin=0.5 * (arc1.p0_out + arc1.p1_out), _T=arc1.T_out, _N=arc1.N_out, _W=arc1.W, root_width=arc1.L, spec=s)
               for s in p['mid_profiles']]
@@ -142,7 +142,7 @@ def build_chain_bracket(p):
                                free_curve=curves[-1],
                                intermediate_curves=curves[:-1],
                                ruled=False)
-    m.register_in_tree(p1, edge_idx=1, child=middle, arc=arc1, start_frac=0.0, end_frac=1.0)
+    m.register_in_tree(p1, edge_idx=2, child=middle, arc=arc1, start_frac=0.0, end_frac=1.0)
 
     p3, _ = m.extend(middle, edge_idx=2,   # CCW free profile edge on LoftPanel
                      angle_deg=p['p3_ang'],
@@ -198,11 +198,11 @@ SAMPLES1 = [
     ('00_only_backbone',
      '',
      _s(p1_w=100, mid_profiles=[
-         _prof(100),
-         _prof(250),
-         _prof(400)],
-        mid_ang=30.0,
-        sp1_edge=None, sp3_edge=None)),
+         _prof(20),
+         _prof(50),
+         _prof(100)],
+        mid_ang=20.0, p3_ang=20.0,
+        sp1_edge=0, sp1_ang=20.0, sp3_edge=2, sp3_ang=20.0)),
     ('chain_01_basic',
      'C-curve middle — 15 mm lateral bow at mid profile',
      _s(p1_w=100, mid_profiles=[

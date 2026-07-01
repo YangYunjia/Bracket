@@ -56,10 +56,10 @@ class PolygonPanel:
 
     @property
     def N(self):
-        return n(np.cross(self.T, self.W))
+        return n(np.cross(self.W, self.T))
 
     def _pt3(self, u, v):
-        return self.origin + float(u)*self.T + float(v)*self.W
+        return self.origin + float(u)*self.W + float(v)*self.T
 
     @property
     def num_edges(self):
@@ -155,7 +155,7 @@ class FlatPanel(PolygonPanel):
 
         self.length = float(length)
         self.width = float(width)
-        vertices = np.array([[0.0, 0.0], [length, 0.0], [length, width], [0.0, width]])
+        vertices = np.array([[0.0, 0.0], [width, 0.0], [width, length], [0.0, length]])
         super().__init__(name, origin, T, W, vertices, corner_r)
 
 

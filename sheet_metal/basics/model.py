@@ -206,7 +206,7 @@ class SheetMetalModel:
             corner_r=child_corner_r,
         )
         child.corner_trim[0] = 0.0
-        child.corner_trim[3] = 0.0
+        child.corner_trim[1] = 0.0
         child._register_child(0, 0.0, 1.0)
         # print("Child panel added at edge", edge_idx, "with origin:", child_origin)
         self.panels.append(child)
@@ -253,7 +253,7 @@ class SheetMetalModel:
         child = LoftPanel(**kwargs) if panel_type == 'loft' else PipePanel(**kwargs)
         
         child.corner_trim[0] = 0.0
-        child.corner_trim[3] = 0.0
+        child.corner_trim[1] = 0.0
         child._register_child(0, 0.0, 1.0)
         self.panels.append(child)
 

@@ -144,7 +144,7 @@ def _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W):
 
     def to_3d(uv):
         uv = np.asarray(uv, float)
-        return origin + float(uv[0]) * T + float(uv[1]) * W
+        return origin + float(uv[0]) * W + float(uv[1]) * T
 
     # ── Precompute arc geometry at each vertex ────────────────────────────────
     # Arc is inserted only on convex corners with corner_trim[i] > 0.
