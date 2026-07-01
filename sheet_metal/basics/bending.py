@@ -33,9 +33,6 @@ class PartialBendArc:
         self.p0     = np.asarray(p0, float)
         self.p1     = np.asarray(p1, float)
 
-        self.p0_out = p0 + r_n * ((1 - np.cos(alpha)) * N_bend + np.sin(alpha) * T_in)
-        self.p1_out = p1 + r_n * ((1 - np.cos(alpha)) * N_bend + np.sin(alpha) * T_in)
-
         self.L      = float(np.linalg.norm(self.p1 - self.p0))
 
         self.T_in  = n(T_in)
@@ -51,6 +48,10 @@ class PartialBendArc:
         else:
             self.blend_r = (float(blend_r), float(blend_r))
         self.blend_mode  = blend_mode
+
+        self.eff_r_n = max(self.r_n, max(self.blend_r) / self.alpha) if self.alpha > 1e-9 else self.r_n # ensure the length of the arc is at least the radius of the blend
+        self.p0_out = p0 + self.eff_r_n * ((1 - np.cos(alpha)) * N_bend + np.sin(alpha) * T_in)
+        self.p1_out = p1 + self.eff_r_n * ((1 - np.cos(alpha)) * N_bend + np.sin(alpha) * T_in)
 
 # ── BendArc ───────────────────────────────────────────────────────────────────
 

@@ -201,8 +201,8 @@ SAMPLES1 = [
          _prof(20),
          _prof(50),
          _prof(100)],
-        mid_ang=20.0, p3_ang=20.0,
-        sp1_edge=0, sp1_ang=20.0, sp3_edge=2, sp3_ang=20.0)),
+        mid_ang=0.0, p3_ang=0.0,
+        sp1_edge=0, sp1_ang=0.0, sp3_edge=2, sp3_ang=0.0)),
     ('chain_01_basic',
      'C-curve middle — 15 mm lateral bow at mid profile',
      _s(p1_w=100, mid_profiles=[

@@ -740,28 +740,31 @@ class OCC_Renderer(BaseRenderer):
         arc = obj
         alpha = float(arc.alpha)
         L     = float(arc.L)
-        if L < 1e-12 or abs(alpha) < 1e-9:
-            raise ValueError('PartialBendArc is too short or has no angle')
+        r_n = float(arc.eff_r_n)
+        if L < 1e-12:
+            raise ValueError('PartialBendArc is too short')
 
-        def pt_at(s, a):
+        def pt_at(s, fa):
             """ Mapping the point s (on the parent edge) to the arc at arc angle. """
-            frac   = s / L
-            p_edge = (1.0 - frac) * arc.p0 + frac * arc.p1
-            C      = p_edge + arc.r_n * arc.N_bend
-            return C + arc.r_n * (-np.cos(a) * arc.N_bend + np.sin(a) * arc.T_in)
+            frac_W   = s / L
+            p_edge = (1.0 - frac_W) * arc.p0 + frac_W * arc.p1
+            if abs(alpha) > 1e-9:
+                a = fa * alpha
+                return p_edge + r_n * ((1-np.cos(a)) * arc.N_bend + np.sin(a) * arc.T_in)
+            return p_edge + r_n * arc.T_in * fa
 
-        def ext(a, blend):
-            t = a / alpha
+        def ext(frac, blend):
             if arc.blend_mode == 'linear':
-                return blend * (1.0 - t)
-            return blend * (1.0 - np.sqrt(max(0.0, t * (2.0 - t))))
+                return blend * (1.0 - frac)
+            return blend * (1.0 - np.sqrt(max(0.0, frac * (2.0 - frac))))
 
-        a_vals = np.linspace(0.0, alpha, self.n_arc_bend + 1)
 
         thru = BRepOffsetAPI_ThruSections(False, True)   # shell, ruled
-        for a in a_vals:
-            pA   = pt_at(  - ext(a, arc.blend_r[0]), a)
-            pB   = pt_at(L + ext(a, arc.blend_r[1]), a)
+        for i in range(self.n_arc_bend + 1):
+            frac_alpha = i / self.n_arc_bend
+            pA   = pt_at(  - ext(frac_alpha, arc.blend_r[0]), frac_alpha)
+            pB   = pt_at(L + ext(frac_alpha, arc.blend_r[1]), frac_alpha)
+                
             seg  = BRepBuilderAPI_MakeEdge(_to_pnt(pA), _to_pnt(pB)).Edge()
             w    = BRepBuilderAPI_MakeWire(seg).Wire()
             thru.AddWire(w)
