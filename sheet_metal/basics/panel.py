@@ -7,6 +7,8 @@ import numpy as np
 from .maths import n, signed_area2
 from .curve import Curve3D
 
+from typing import Union
+
 # ── FlatPanel ─────────────────────────────────────────────────────────────────
 
 class PolygonPanel:
@@ -151,6 +153,8 @@ class FlatPanel(PolygonPanel):
     def __init__(self, origin, T, W, length, width, name='F',
                  corner_r=0.0):
 
+        self.length = float(length)
+        self.width = float(width)
         vertices = np.array([[0.0, 0.0], [length, 0.0], [length, width], [0.0, width]])
         super().__init__(origin, T, W, vertices, name, corner_r)
 
@@ -423,3 +427,6 @@ class PipePanel:
         if i == 3:
             return b0_r.copy(), b0_f.copy(), n(b0_f - b0_r), self.N_at_edge(3)
         raise IndexError(f'PipePanel has 4 edges (0–3), got {i}.')
+
+
+Panel = Union[FlatPanel, LoftPanel, PipePanel]

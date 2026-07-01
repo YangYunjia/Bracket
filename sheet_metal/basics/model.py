@@ -107,11 +107,27 @@ class SheetMetalModel:
         self._node_map[id(p)] = node
         return p
 
-    def pre_extend(self, parent: PolygonPanel | LoftPanel, edge_idx, angle_deg,
+    def extend_bend(self, parent: PolygonPanel | LoftPanel, edge_idx, angle_deg,
                bend_dir=+1, bend_r=5, start_frac=0.0, end_frac=1.0,
-               blend_r=0.5, blend_mode='arc'):
+               blend_r=0.5, blend_mode='arc') -> PartialBendArc:
         """
+        Extend a panel from an edge via a bend arc.
 
+        Parameters
+        ----------
+        parent : PolygonPanel | LoftPanel
+        edge_idx : int (for LoftPanel, only 0 and 2 are extendable)
+        angle_deg : float (bend angle in degrees)
+        bend_dir : int (1 or -1)
+        bend_r : float (bend radius)
+        start_frac : float (without the blend_r)
+        end_frac : float (without the blend_r)
+        blend_r : float (blend radius on each side of the edge)
+        blend_mode : str (blend mode, 'arc' or 'linear')
+
+        Returns
+        -------
+        arc : PartialBendArc
         raises ValueError if the edge is occupied by another child panel
         """
         if isinstance(parent, LoftPanel) and edge_idx not in LoftPanel._EXTENDABLE_EDGES:
@@ -169,66 +185,71 @@ class SheetMetalModel:
             blend_r=(_st_blend_r, _en_blend_r), blend_mode=blend_mode,
         )
 
+        self.arcs.append(arc)
         return arc
 
-
-    def register_child(self, parent, edge_idx, child, arc, start_frac, end_frac):
+    def register_in_tree(self, parent, edge_idx, child, arc, start_frac, end_frac):
         parent_node = self._node_map[id(parent)]
         child_node  = PanelNode(child, parent=parent_node, edge_idx=edge_idx,
                                 arc=arc, start_frac=start_frac, end_frac=end_frac)
         parent_node.children.append(child_node)
         self._node_map[id(child)] = child_node
-        self.panels.append(child)
-        self.arcs.append(arc)
         return child, arc
 
-
-    def extend(self, parent: PolygonPanel | LoftPanel, edge_idx, angle_deg, child_length, child_corner_r=0.0,
+    def extend(self, parent: PolygonPanel | LoftPanel, edge_idx, angle_deg, 
+               panel_type='flat',
+               child_length=10.0, child_corner_r=0.0,
+               free_curve=None, intermediate_curves=None, t_end=None, ruled=False,
                bend_dir=+1, bend_r=5, start_frac=0.0, end_frac=1.0,
                blend_r=0.5, blend_mode='arc'):
 
-        arc = self.pre_extend(parent, edge_idx, angle_deg,
+        arc = self.extend_bend(parent, edge_idx, angle_deg,
                               bend_dir=bend_dir, bend_r=bend_r, start_frac=start_frac, end_frac=end_frac,
                               blend_r=blend_r, blend_mode=blend_mode)
+        if panel_type == 'flat':
+            child = self.extend_flat_panel(f'{parent.name}.e{edge_idx}', arc, child_length, child_corner_r)
+        elif panel_type in ['loft', 'pipe']:
+            child = self.extend_loft_panel(f'{parent.name}.e{edge_idx}', arc, free_curve, intermediate_curves, t_end, ruled)
+        else:
+            raise ValueError(f"Invalid panel type: {panel_type}")
+
+        self.register_in_tree(parent, edge_idx, child, arc, start_frac, end_frac)
+        
+        return child, arc
+
+    def extend_flat_panel(self, name: str, arc: PartialBendArc, child_length, child_corner_r=0.0):
 
         # Child panel direction ──────
         child = FlatPanel(
             origin=arc.p0_out, T=arc.T_out, W=arc.W,
             length=child_length, width=arc.L,
-            name=f'{parent.name}.e{edge_idx}',
+            name=name,
             corner_r=child_corner_r,
         )
         child.corner_trim[0] = 0.0
-        child.corner_trim[1] = 0.0
+        child.corner_trim[3] = 0.0
+        child._register_child(0, 0.0, 1.0)
         # print("Child panel added at edge", edge_idx, "with origin:", child_origin)
-        self.register_child(parent, edge_idx, child, arc, start_frac, end_frac)
-        return child, arc
+        self.panels.append(child)
 
-    def extend_arm(self, parent, edge_idx, angle_deg, free_curve,
-                   bend_dir=+1, bend_r=0.5, start_frac=0.0, end_frac=1.0,
-                   intermediate_curves=None, t_end=None, ruled=False,
-                   panel_type='loft',
-                   blend_r=0.5, blend_mode='arc'):
+        return child
+
+
+    def extend_loft_panel(self, name: str, arc: PartialBendArc, free_curve,
+                   intermediate_curves=None, t_end=None, ruled=False, panel_type='loft'):
         """Extend a LoftPanel or PipePanel child from parent.
 
         Parameters
         ----------
-        parent             : any panel type
-        edge_idx           : edge on parent
-        angle_deg          : bend angle in degrees
+        name               : name of the panel
+        arc                : PartialBendArc
         free_curve         : Curve3D or [(x,y,z),(x,y,z)] for the far edge
-        bend_dir           : +1 / -1
-        start_frac, end_frac: span along parent edge
         intermediate_curves: optional list of Curve3D between root and free
         t_end              : optional unit tangent override at the free edge
         ruled              : True → ruled; False → smooth (default)
-        panel_type         : 'loft' (ThruSections) or 'pipe' (MakePipeShell)
 
-        Returns (child_panel, arc).
+        Returns the LoftPanel / PipePanel.
         """
-        arc = self.pre_extend(parent, edge_idx, angle_deg,
-                        bend_dir=bend_dir, bend_r=bend_r, start_frac=start_frac, end_frac=end_frac,
-                        blend_r=blend_r, blend_mode=blend_mode)
         
         root_curve = Curve3D.line(arc.p0_out, arc.p1_out)
 
@@ -249,12 +270,15 @@ class SheetMetalModel:
             t_end_val = n(np.asarray(t_end, float))
 
         kwargs = dict(profiles=profiles, t_start=arc.T_out, t_end=t_end_val,
-                    ruled=ruled, name=f'{parent.name}.e{edge_idx}')
+                    ruled=ruled, name=name)
         child = LoftPanel(**kwargs) if panel_type == 'loft' else PipePanel(**kwargs)
         
-        self.register_child(parent, edge_idx, child, arc, start_frac, end_frac)
-        return child, arc
+        child.corner_trim[0] = 0.0
+        child.corner_trim[3] = 0.0
+        child._register_child(0, 0.0, 1.0)
+        self.panels.append(child)
 
+        return child
 
 
     def add_recess(self, panel, cx, cy, width, height, corner_r,
