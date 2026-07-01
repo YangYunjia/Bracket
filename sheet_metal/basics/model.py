@@ -5,45 +5,11 @@ sheet_metal.model — SheetMetalModel builder and renderer.
 import numpy as np
 
 from .maths import n
-from .panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel, Curve3D
+from .curve import Curve3D
+from .panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel
 from .bending import PartialBendArc
 from .tree import PanelNode
 from .recess import StampedRecess, PolygonRecess
-
-'''
-def _arc_transform_curve(parent_crv, parent, alpha, r_n, bdir,
-                         T_child, W_child, child_origin):
-    """Return a BSplineEdge for the child's root edge (edge index 3).
-
-    Transforms each control point of the parent edge curve through the arc
-    geometry to produce the corresponding child-side curve in the child's
-    local (T_child, W_child) frame.  The result is reversed so that eval(0)
-    corresponds to the C3 endpoint and eval(1) to C0 (matching edge-3
-    direction in the CCW child SplinePanel).
-    """
-    cp_2d = parent_crv.control_pts   # (M, 2) in parent (u, v)
-    M     = len(cp_2d)
-    ts    = np.linspace(0.0, 1.0, M)
-
-    child_v = []
-    for ti, (ui, vi) in zip(ts, cp_2d):
-        p_i    = parent.origin + ui*parent.T + vi*parent.W
-        tang   = parent_crv.tangent(float(ti))
-        tn     = np.linalg.norm(tang)
-        if tn < 1e-12:
-            tang = np.array([1.0, 0.0])
-            tn   = 1.0
-        tang      /= tn
-        T_out_i    = n(tang[1]*parent.T - tang[0]*parent.W)
-        C_i        = p_i + r_n * bdir
-        q_i        = C_i + r_n * (-np.cos(alpha)*bdir + np.sin(alpha)*T_out_i)
-        child_v.append(float(np.dot(q_i - child_origin, W_child)))
-
-    # Edge 3 in the child CCW polygon goes from C3 (v=max) to C0 (v=0).
-    # The arc-transformed curve goes C0→C3 (v increases), so reverse it.
-    child_cp = [[0.0, v] for v in reversed(child_v)]
-    return BSplineEdge(child_cp, parent_crv.degree)
-'''
 
 
 class SheetMetalModel:

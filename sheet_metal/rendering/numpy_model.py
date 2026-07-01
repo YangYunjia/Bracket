@@ -7,7 +7,6 @@ the class can be used as a drop-in replacement for SheetMetalModel.
 
 Quality parameters accepted by render():
   n_arc_bend    (int, 28)  — arc subdivisions for BendArc
-  n_arc_partial (int, 32)  — arc subdivisions for PartialBendArc
   n_blend       (int, 16)  — width subdivisions for PartialBendArc
   n_sample      (int, 32)  — profile sample count for LoftPanel
   n_curve       (int, 12)  — edge samples for SplinePanel curved edges
@@ -170,12 +169,11 @@ class NumpyBracketModel(BaseRenderer):
     """
 
     def __init__(self, t=2.0, inner_r=5.0,
-               n_arc_bend=28, n_arc_partial=32, n_blend=16,
+               n_arc_bend=28, n_blend=16,
                n_sample=32, n_curve=12, n_boundary=80, n_profile=20):
 
         super().__init__(t=t, inner_r=inner_r)
         self.n_arc_bend = n_arc_bend
-        self.n_arc_partial = n_arc_partial
         self.n_blend = n_blend
         self.n_sample = n_sample
         self.n_curve = n_curve
@@ -274,26 +272,26 @@ class NumpyBracketModel(BaseRenderer):
         C      = p_edge + obj.r_n * obj.N_bend
         return C + obj.r_n * (-np.cos(a)*obj.N_bend + np.sin(a)*obj.T_out)
 
-    @staticmethod
-    def _ext(obj: PartialBendArc, a):
-        t = a / obj.alpha
-        if obj.taper == 'linear':
-            scale = 1.0 - t
-        else:
-            scale = 1.0 - np.sqrt(max(0.0, t * (2 - t)))
-        return obj.blend * scale
 
     def render_partial_bend_arc(self, obj: PartialBendArc):
-        a_vals = np.linspace(0.0, obj.alpha, self.n_arc + 1)
+        
+        alpha = obj.alpha
+        a_vals = np.linspace(0.0, alpha, self.n_arc_bend + 1)
         grid = []
+
+        def ext(a, blend):
+            t = a / alpha
+            if obj.blend_mode == 'linear':
+                return blend * (1.0 - t)
+            return blend * (1.0 - np.sqrt(max(0.0, t * (2.0 - t))))
+
         for a in a_vals:
-            ext  = self._ext(obj, a)
-            s_lo = max(0.0,   obj.s0 - ext)
-            s_hi = min(obj.L, obj.s1 + ext)
+            s_lo = obj.p0 - ext(a, obj.blend_r[0])
+            s_hi = obj.p1 + ext(a, obj.blend_r[1])
             grid.append([self._pt(obj, np.clip(s / obj.L, 0.0, 1.0), a)
                          for s in np.linspace(s_lo, s_hi, self.n_blend + 1)])
         return [[grid[i][j], grid[i][j+1], grid[i+1][j+1], grid[i+1][j]]
-                for i in range(self.n_arc) for j in range(self.n_blend)]
+                for i in range(self.n_arc_bend) for j in range(self.n_blend)]
 
     # ---------------------------------------
     # Recess rendering

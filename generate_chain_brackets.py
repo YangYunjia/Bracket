@@ -53,7 +53,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 from sheet_metal.rendering.occ_model import OCC_Renderer
-from sheet_metal.basics.panel import Curve3D
+from sheet_metal.basics.curve import Curve3D
 from sheet_metal.basics.model import SheetMetalModel
 
 OUT      = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output_chain')

@@ -436,154 +436,6 @@ def _pipe_panel_occ(panel: PipePanel):
     return pipe.Shape()
 
 
-# ─── bend arc builders ─────────────────────────────────────────────────────────
-
-# ── Backend A: exact Geom_CylindricalSurface ─────────────────────────────────
-# Assumes both edges are parallel, equal-length, and straight.  Exact for
-# aligned BendArc; incorrect for partial-span, non-parallel, or curved edges.
-
-# def _bend_arc_cyl_occ(arc: BendArc):
-#     """Exact Geom_CylindricalSurface face for an aligned straight BendArc."""
-#     p0     = np.asarray(arc.p0, float)
-#     p1     = np.asarray(arc.p1, float)
-#     N_bend = n(np.asarray(arc.N_bend, float))
-#     alpha  = float(arc.alpha)
-#     r_n    = float(arc.r_n)
-
-#     L = float(np.linalg.norm(p1 - p0))
-#     if L < 1e-12 or abs(alpha) < 1e-9:
-#         raise ValueError('BendArc is too short or has no angle')
-
-#     edge_dir = (p1 - p0) / L
-#     C0  = p0 + r_n * N_bend
-#     ax3 = gp_Ax3(_to_pnt(C0), _to_dir(edge_dir), _to_dir(-N_bend))
-#     cyl = Geom_CylindricalSurface(ax3, r_n)
-
-#     maker = BRepBuilderAPI_MakeFace(cyl, -alpha, 0.0, 0.0, L, 1e-6)
-#     if not maker.IsDone(): raise ValueError('MakeFace failed')
-#     return maker.Face()
-
-
-# ── Backend B: arc-guided ThruSections loft ───────────────────────────────────
-# Works for ANY pair of parent/child edge geometries: different lengths,
-# non-parallel directions, B-spline curves.
-#
-# Key idea: for each corresponding pair of samples (pA_j, cA_j) on the parent
-# and child edges, the local arc center and tangent-out are back-derived from:
-#
-#   C_j    = pA_j + r_n · N_bend
-#   T_out_j = (cA_j − C_j + r_n·cos(α)·N_bend) / (r_n·sin(α))
-#
-# This satisfies pA_j = C_j − r_n·N_bend (at a=0) and cA_j (at a=α) exactly.
-# At intermediate angle a: P(a) = C_j + r_n·(−cos(a)·N + sin(a)·T_out_j).
-#
-# For an aligned straight BendArc all T_out_j are identical to arc.T_out
-# and the loft reduces to the cylindrical surface (within tessellation error).
-
-# def _bend_arc_loft_occ(arc: BendArc, n_arc=24):
-#     """Arc-guided loft for BendArc (straight, possibly partial-span)."""
-#     p0    = np.asarray(arc.p0, float)
-#     p1    = np.asarray(arc.p1, float)
-#     T_out = n(np.asarray(arc.T_out, float))     # unit tangent at parent edge
-#     Nb    = n(np.asarray(arc.N_bend, float))    # unit bend normal
-#     alpha = float(arc.alpha)                    # total bend angle (radians)
-#     r_n   = float(arc.r_n)                      # neutral-axis bend radius
-
-#     if abs(alpha) < 1e-9 or np.linalg.norm(p1 - p0) < 1e-9:
-#         raise ValueError('BendArc is too short or has no angle')
-
-#     # For a straight edge just the two endpoints are needed
-#     parent_pts = np.array([p0, p1])
-#     C_pts      = parent_pts + r_n * Nb
-#     child_pts  = C_pts + r_n * (-np.cos(alpha) * Nb + np.sin(alpha) * T_out)
-
-#     """Arc-guided ThruSections loft between sampled parent and child edges.
-#     return _arc_loft_occ(parent_pts, child_pts, Nb, alpha, r_n, n_arc=n_arc)
-
-#     Parameters
-#     ----------
-#     parent_pts : (M+1, 3) 3-D samples along the parent (source) edge
-#     child_pts  : (M+1, 3) 3-D samples along the child  (target) edge
-#     N_bend     : unit bend normal
-#     alpha      : total bend angle (radians)
-#     r_n        : neutral-axis bend radius
-#     n_arc      : number of arc-angle sections (more → smoother curve)
-
-#     Returns OCC shape or None on failure.
-#     """
-#     sa_alpha = np.sin(float(alpha)) 
-#     ca_alpha = np.cos(float(alpha))
-#     if abs(sa_alpha) < 1e-9: raise ValueError('alpha is too small')
-
-#     parent_pts = np.asarray(parent_pts, float)
-#     child_pts  = np.asarray(child_pts,  float)
-
-#     # Arc centres along the parent edge
-#     C_js = parent_pts + r_n * Nb                           # (M+1, 3)
-
-#     # Local tangent-out back-derived from cA = C + r·(−cos α·Nb + sin α·T_out)
-#     T_outs = (child_pts - C_js + r_n * ca_alpha * Nb) / (r_n * sa_alpha)  # (M+1, 3)
-
-#     thru = BRepOffsetAPI_ThruSections(False, False)   # shell, smooth loft
-#     n_added = 0
-
-#     for a in np.linspace(0.0, float(alpha), n_arc + 1):
-#         ca, sa = np.cos(a), np.sin(a)
-#         # Profile points at this arc angle
-#         pts_k = C_js + r_n * (-ca * Nb + sa * T_outs)   # (M+1, 3)
-
-#         poly = BRepBuilderAPI_MakePolygon()
-#         for p in pts_k:
-#             poly.Add(_to_pnt(p))
-#         if poly.IsDone():
-#             thru.AddWire(poly.Wire())
-#             n_added += 1
-
-#     if n_added < 2:
-#         raise ValueError('Not enough wires added')
-    
-#     thru.Build()
-#     if not thru.IsDone(): raise ValueError('Build failed')
-#     return thru.Shape()
-
-
-def _partial_arc_occ(arc: PartialBendArc, n_alpha=24):
-    """ThruSections ruled loft for PartialBendArc — exact OCC surface."""
-
-    alpha = float(arc.alpha)
-    L     = float(arc.L)
-
-    if L < 1e-12 or abs(alpha) < 1e-9:
-        raise ValueError('PartialBendArc is too short or has no angle')
-
-    def pt_at(s, a):
-        """ Mapping the point s (on the parent edge) to the arc at arc angle. """
-        frac   = s / L
-        p_edge = (1.0 - frac) * arc.p0 + frac * arc.p1
-        C      = p_edge + arc.r_n * arc.N_bend
-        return C + arc.r_n * (-np.cos(a) * arc.N_bend + np.sin(a) * arc.T_in)
-
-    def ext(a, blend):
-        t = a / alpha
-        if arc.blend_mode == 'linear':
-            return blend * (1.0 - t)
-        return blend * (1.0 - np.sqrt(max(0.0, t * (2.0 - t))))
-
-    a_vals = np.linspace(0.0, alpha, n_alpha + 1)
-
-    thru = BRepOffsetAPI_ThruSections(False, True)   # shell, ruled
-    for a in a_vals:
-        pA   = pt_at(  - ext(a, arc.blend_r[0]), a)
-        pB   = pt_at(L + ext(a, arc.blend_r[1]), a)
-        seg  = BRepBuilderAPI_MakeEdge(_to_pnt(pA), _to_pnt(pB)).Edge()
-        w    = BRepBuilderAPI_MakeWire(seg).Wire()
-        thru.AddWire(w)
-
-    thru.Build()
-    if not thru.IsDone(): raise ValueError('Build failed')
-    return thru.Shape()
-
-
 # ─── recess shape builders ─────────────────────────────────────────────────────
 
 def _rounded_rect_wire_occ(half_a, half_b, corner_r, center_3d, T, W):
@@ -800,20 +652,29 @@ class OCC_Renderer(BaseRenderer):
     computed correctly.
     """
 
-    def __init__(self, linear_deflection=0.5, angular_deflection=0.5, arc_backend='loft',
+    def __init__(self, linear_deflection=0.5, angular_deflection=0.5, n_arc_bend=32,
                  **kwargs):
         '''
-        arc_backend : 'loft'  — arc-guided ThruSections (default, handles any
-                                 edge geometry: partial-span, non-parallel,
-                                 B-spline curved edges).
-                      'cyl'   — exact Geom_CylindricalSurface (BendArc only;
-                                 requires aligned, equal-length, straight edges).
+        (OCC rendering parameters)
+        linear_deflection: linear deflection
+        angular_deflection: angular deflection
+
+        (BendArc rendering parameters)
+        arc_n_alpha: number of arc angle sections (more → smoother curve)
+
+        (Plot parameters)
+        group_colors: dict of group colors
+        marker_colors: dict of marker colors
+        edge_color: color of the edge
+        alpha_surf: alpha value for the surface
+        lw: line width
         '''
         super().__init__(**kwargs)
 
-        self.arc_backend = arc_backend
         self.linear_deflection = linear_deflection
         self.angular_deflection = angular_deflection
+
+        self.n_arc_bend = n_arc_bend
 
     def tessellate(self, shape):
         """Tessellate an OCC shape into a list of triangles.
@@ -874,14 +735,40 @@ class OCC_Renderer(BaseRenderer):
 
 
     def render_arc(self, obj: PartialBendArc):
-        """Dispatch to the correct OCC arc builder.
-
-        backend : 'loft'  — arc-guided ThruSections loft (default).
-                            Handles non-aligned edges, partial spans, B-splines.
-                'cyl'   — exact Geom_CylindricalSurface (BendArc only).
-                            Correct only for aligned equal-length straight edges.
+        """ThruSections ruled loft for PartialBendArc — exact OCC surface.
         """
-        return _partial_arc_occ(obj)
+        arc = obj
+        alpha = float(arc.alpha)
+        L     = float(arc.L)
+        if L < 1e-12 or abs(alpha) < 1e-9:
+            raise ValueError('PartialBendArc is too short or has no angle')
+
+        def pt_at(s, a):
+            """ Mapping the point s (on the parent edge) to the arc at arc angle. """
+            frac   = s / L
+            p_edge = (1.0 - frac) * arc.p0 + frac * arc.p1
+            C      = p_edge + arc.r_n * arc.N_bend
+            return C + arc.r_n * (-np.cos(a) * arc.N_bend + np.sin(a) * arc.T_in)
+
+        def ext(a, blend):
+            t = a / alpha
+            if arc.blend_mode == 'linear':
+                return blend * (1.0 - t)
+            return blend * (1.0 - np.sqrt(max(0.0, t * (2.0 - t))))
+
+        a_vals = np.linspace(0.0, alpha, self.n_arc_bend + 1)
+
+        thru = BRepOffsetAPI_ThruSections(False, True)   # shell, ruled
+        for a in a_vals:
+            pA   = pt_at(  - ext(a, arc.blend_r[0]), a)
+            pB   = pt_at(L + ext(a, arc.blend_r[1]), a)
+            seg  = BRepBuilderAPI_MakeEdge(_to_pnt(pA), _to_pnt(pB)).Edge()
+            w    = BRepBuilderAPI_MakeWire(seg).Wire()
+            thru.AddWire(w)
+
+        thru.Build()
+        if not thru.IsDone(): raise ValueError('Build failed')
+        return thru.Shape()
 
 
 
