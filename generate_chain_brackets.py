@@ -125,6 +125,7 @@ def _add_small_panel(m: SheetMetalModel, parent: Panel, edge_idx: int, angle_deg
 
 def build_chain_bracket(p):
     """Build a chain bracket from parameter dict *p*."""
+    fastener_panels = []
     bend_r1 = float(p['bend_r1'])
     bend_r2 = float(p['bend_r2'])
 
@@ -150,6 +151,7 @@ def build_chain_bracket(p):
                      child_length=p['p3_l'],
                      child_corner_r=p['corner_r_main'],
                      bend_r=bend_r2,
+                     bend_dir=np.sign(p['p3_ang']),
                      name='P2')
 
     if p['sp1_edge'] is not None:
@@ -158,6 +160,7 @@ def build_chain_bracket(p):
                                p['sp1_f0'], p['sp1_f1'],
                                p['sp1_blend'], p['sp1_cr'])
         m.mark_hole(sp1, sp1.length / 2.0, sp1.width / 2.0, label='F1')
+        fastener_panels.append(np.array([sp1._pt3(*pt) for pt in sp1.vertices]))
     else:
         sp1 = None
 
@@ -167,10 +170,11 @@ def build_chain_bracket(p):
                                p['sp3_f0'], p['sp3_f1'],
                                p['sp3_blend'], p['sp3_cr'])
         m.mark_hole(sp3, sp3.length / 2.0, sp3.width / 2.0, label='F3')
+        fastener_panels.append(np.array([sp3._pt3(*pt) for pt in sp3.vertices]))
     else:
         sp3 = None
 
-    return m
+    return m, fastener_panels
 
 
 # ── sample parameter sets ─────────────────────────────────────────────────────
@@ -203,6 +207,31 @@ SAMPLES1 = [
          _prof(100)],
         mid_ang=0.0, p3_ang=0.0,
         sp1_edge=0, sp1_ang=0.0, sp3_edge=2, sp3_ang=0.0)),
+    ('00_twist',
+     '',
+     _s(p1_w=100, mid_profiles=[
+         _prof(20),
+         _prof(50, shift_n=15, twist=10),
+         _prof(100,twist=20)],
+        mid_ang=20.0, p3_ang=-20.0,
+        sp1_edge=0, sp1_ang=0.0, sp3_edge=2, sp3_ang=0.0)),
+    ('00_bend',
+     '',
+     _s(p1_w=100, bend_r2=40.0, mid_profiles=[
+         _prof(20),
+         _prof(50, shift_n=15, twist=10),
+         _prof(100,twist=20)],
+        mid_ang=70.0, p3_ang=-70.0,
+        sp1_edge=0, sp1_ang=0.0, sp3_edge=2, sp3_ang=0.0)),
+    ('side_flat',
+     '',
+     _s(p1_w=100, mid_profiles=[
+         _prof(20),
+         _prof(50),
+         _prof(100)],
+        mid_ang=0.0, p3_ang=0.0,
+        sp1_edge=1, sp1_ang=0.0,
+        sp3_edge=1, sp3_ang=0.0)),
     ('chain_01_basic',
      'C-curve middle — 15 mm lateral bow at mid profile',
      _s(p1_w=100, mid_profiles=[
@@ -221,10 +250,11 @@ if __name__ == '__main__':
     tessellateds = {}
 
     for name, title, params in sample_set:
-        m = build_chain_bracket(params)
+        m, fastener_panels = build_chain_bracket(params)
         groups, markers = renderer.render(m)
         tessellated = renderer.export_tessellated(groups)
-        tessellateds[name] = tessellated
+        tessellateds[name] = {'facets': tessellated, 'fastener_panels': fastener_panels}
+
         fig = plt.figure(figsize=(14, 5))
 
         for i, (elev, azim, label) in enumerate(VIEWS, 1):

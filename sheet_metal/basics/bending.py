@@ -50,8 +50,12 @@ class PartialBendArc:
         self.blend_mode  = blend_mode
 
         self.eff_r_n = max(self.r_n, max(self.blend_r) / self.alpha) if self.alpha > 1e-9 else self.r_n # ensure the length of the arc is at least the radius of the blend
-        self.p0_out = p0 + self.eff_r_n * ((1 - np.cos(alpha)) * N_bend + np.sin(alpha) * T_in)
-        self.p1_out = p1 + self.eff_r_n * ((1 - np.cos(alpha)) * N_bend + np.sin(alpha) * T_in)
+        
+        def shift_point(p):
+            return p + self.eff_r_n * ((1 - np.cos(alpha)) * N_bend + np.sin(alpha) * T_in) if alpha > 1e-9 else p + self.r_n * T_in
+        
+        self.p0_out = shift_point(self.p0)
+        self.p1_out = shift_point(self.p1)
 
 # ── BendArc ───────────────────────────────────────────────────────────────────
 

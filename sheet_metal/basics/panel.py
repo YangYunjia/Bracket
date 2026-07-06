@@ -5,9 +5,9 @@ panels.py — panel types for sheet metal brackets.
 
 import numpy as np
 from .maths import n, signed_area2
-from .curve import Curve3D
+from .curve import Curve3D, BaseCurve3D
 
-from typing import Union
+from typing import Union, List
 
 # ── FlatPanel ─────────────────────────────────────────────────────────────────
 
@@ -49,10 +49,26 @@ class PolygonPanel:
             pts = pts[::-1]        # normalise to CCW
         self.vertices = pts        # (N, 2), relative to the origin
 
-        self._edge_lengths = [np.linalg.norm(self.start_idx(i) - self.end_idx(i)) for i in range(len(vertices))]
         self._edge_spans = [[] for _ in range(len(vertices))] # edge_idx → [(start_frac, end_frac), ...] (indicate the occupied portion of the edge)
-        # self.corner_blocked = [False] * len(vertices) # indicate if the corner is blocked by a child panel
-        self.corner_trim    = [self._initial_corner_trim(i) for i in range(len(vertices))] # compute the corner-rounding trim length at each vertex
+        self.corner_trim    = [self._initial_corner_trim(i) for i in range(len(pts))]
+        
+        # initialize edge curves
+        self.edge_curves: List[BaseCurve3D] = []
+        for i in range(len(self.vertices)):
+            p0 = self._pt3(*self.vertices[self.start_idx(i)])
+            p1 = self._pt3(*self.vertices[self.end_idx(i)])
+            self.edge_curves.append(Curve3D.line(p0, p1))
+
+    _EXTENDABLE_EDGES = None   # all edges extendable
+
+
+    def edge_curve(self, edge_idx: int) -> BaseCurve3D:
+        """Sharp extendable-edge geometry as a Curve3D polyline."""
+        return self.edge_curves[edge_idx]
+
+    def split_edge_at_fracs(self, edge_idx: int, fracs) -> None:
+        """Insert vertices on edge *edge_idx* at arc-length fractions (sharp geometry)."""
+        self.edge_curves[edge_idx] = self.edge_curves[edge_idx].insert_fracs([float(f) for f in fracs])
 
     @property
     def N(self):
@@ -64,9 +80,6 @@ class PolygonPanel:
     @property
     def num_edges(self):
         return len(self.vertices)
-
-    def edge_length(self, edge_idx):
-        return self._edge_lengths[edge_idx]
 
     def start_idx(self, edge_idx):
         return edge_idx
@@ -121,18 +134,13 @@ class PolygonPanel:
         """Return (p0, p1, edge_dir, outward_dir) for polygon edge i.
 
         Compatible with extend_panel / SheetMetalModel.extend().
+        Uses the sharp edge_curve endpoints and mid-tangent.
         """
-        verts = self.vertices
-        dvert = (verts[self.end_idx(i)] - verts[self.start_idx(i)])
-        p0 = self._pt3(*verts[self.start_idx(i)])
-        p1 = self._pt3(*verts[self.end_idx(i)])
-
-        # Edge direction in 3-D
-        ed  = dvert[0]*self.T + dvert[1]*self.W
-        # Outward normal: right-hand perp of CCW edge = rotate −90°
-        out = dvert[1] * self.T - dvert[0] * self.W
-
-        return p0.copy(), p1.copy(), n(ed), n(out)
+        crv = self.edge_curve(i)
+        p0, p1 = crv.endpoints()
+        ed = crv.tangent_at_frac(0.5)
+        out = n(np.cross(ed, self.N)) # outward direction is the right-hand perpendicular of the edge direction
+        return p0.copy(), p1.copy(), ed, out
 
 
 class FlatPanel(PolygonPanel):
@@ -211,14 +219,11 @@ class LoftPanel:
         if len(profiles) < 2:
             raise ValueError('LoftPanel needs at least 2 profiles.')
         def _coerce(p):
-            if isinstance(p, Curve3D):
+            if isinstance(p, BaseCurve3D):
                 return p
             pts = np.asarray(p, float)
-            if pts.ndim == 1:
-                raise ValueError('Profile must be a Curve3D or list of 3-D points.')
-            if len(pts) == 2:
-                return Curve3D.line(pts[0], pts[1])
-            return Curve3D('polyline', _pts=pts)
+            if pts.ndim == 1: raise ValueError('Profile must be a Curve3D or list of 3-D points.')
+            return Curve3D.polyline(pts)
         self.profiles    = [_coerce(p) for p in profiles]
         self.ruled       = bool(ruled)
         self.name        = str(name)
@@ -237,6 +242,34 @@ class LoftPanel:
             self.spine_pts = [(a + b) / 2.0
                               for a, b in [p.endpoints() for p in self.profiles]]
 
+    def edge_curve(self, edge_idx: int) -> BaseCurve3D:
+        """Sharp extendable-edge geometry (edges 0 and 2 only).
+
+        Edge 2 follows CCW boundary direction (b0_f → a0_f), opposite to the
+        stored free profile (a0_f → b0_f), so the point order is reversed.
+        """
+        i = int(edge_idx)
+        if i == 0:
+            return self.profiles[0]
+        if i == 2:
+            crv = self.profiles[-1]
+            return crv.reversed()
+        raise ValueError(
+            f'LoftPanel edge {i} is not extendable; use edges {self._EXTENDABLE_EDGES}.')
+
+    def split_edge_at_fracs(self, edge_idx: int, fracs) -> None:
+        """Insert split points on an extendable profile edge."""
+        i = int(edge_idx)
+        if i == 0:
+            self.profiles[0] = self.profiles[0].insert_fracs(fracs)
+        elif i == 2:
+            # fracs are CCW edge fractions; profile is stored in opposite direction
+            mapped = [1.0 - float(f) for f in fracs]
+            self.profiles[-1] = self.profiles[-1].insert_fracs(mapped)
+        else:
+            raise ValueError(
+                f'LoftPanel edge {i} is not extendable; use edges {self._EXTENDABLE_EDGES}.')
+
     # ── CCW corner ring (PolygonPanel-compatible indexing) ───────────────────
 
     def _corners(self):
@@ -254,11 +287,6 @@ class LoftPanel:
 
     def end_idx(self, edge_idx):
         return (int(edge_idx) + 1) % 4
-
-    def edge_length(self, edge_idx):
-        c = self._corners()
-        i = int(edge_idx)
-        return float(np.linalg.norm(c[(i + 1) % 4] - c[i]))
 
     def is_edge_occupied(self, edge_idx: int, start_frac: float, end_frac: float) -> bool:
         return any(float(start_frac) < e - 1e-6 and float(end_frac) > s + 1e-6
@@ -311,11 +339,16 @@ class LoftPanel:
     def edge(self, i):
         """Return (p0, p1, edge_dir, outward_dir) for CCW edge i.
 
-        outward_dir matches PolygonPanel: in-plane exterior normal
-        T_out = normalise(edge_dir × N).
+        Extendable profile edges use the sharp edge_curve; long edges use chords.
         """
         if i not in (0, 1, 2, 3):
             raise IndexError(f'LoftPanel has 4 edges (0–3), got {i}.')
+        if i in self._EXTENDABLE_EDGES:
+            crv = self.edge_curve(i)
+            p0, p1 = crv.endpoints()
+            ed = crv.tangent_at_frac(0.5)
+            out = n(np.cross(ed, self.N_at_edge(i)))
+            return p0.copy(), p1.copy(), ed, out
         corners = self._corners()
         p0 = corners[i]
         p1 = corners[(i + 1) % 4]
@@ -346,14 +379,12 @@ class PipePanel:
             raise ValueError('PipePanel needs at least 2 profiles.')
 
         def _coerce(p):
-            if isinstance(p, Curve3D):
+            if isinstance(p, BaseCurve3D):
                 return p
             pts = np.asarray(p, float)
             if pts.ndim == 1:
                 raise ValueError('Profile must be a Curve3D or list of 3-D points.')
-            if len(pts) == 2:
-                return Curve3D.line(pts[0], pts[1])
-            return Curve3D('polyline', _pts=pts)
+            return Curve3D.polyline(pts)
 
         self.profiles    = [_coerce(p) for p in profiles]
         self.ruled       = bool(ruled)

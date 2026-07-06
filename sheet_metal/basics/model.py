@@ -5,7 +5,7 @@ sheet_metal.model — SheetMetalModel builder and renderer.
 import numpy as np
 
 from .maths import n
-from .curve import Curve3D
+from .curve import Curve3D, BaseCurve3D
 from .panel import Panel, FlatPanel, PolygonPanel, LoftPanel, PipePanel
 from .bending import PartialBendArc
 from .tree import PanelNode
@@ -111,9 +111,13 @@ class SheetMetalModel:
                 f'{LoftPanel._EXTENDABLE_EDGES} (root=0, free=2), got {edge_idx}.')
 
         # transform start_frac and end_frac to length
-        p0_full, p1_full, edge_dir, T_out = parent.edge(edge_idx)
-        # L = parent.edge_length(edge_idx)
-        L = np.linalg.norm(p1_full - p0_full)
+        crv = parent.edge_curve(edge_idx)
+        L = crv.length()
+        edge_dir = crv.tangent_at_frac(0.5)
+        N_src = (parent.N_at_edge(edge_idx)
+                 if hasattr(parent, 'N_at_edge')
+                 else parent.N)
+        T_out = n(np.cross(crv.tangent_at_frac(0.0), N_src))
         start_frac_length = start_frac * L
         end_frac_length   = (1 - end_frac) * L
         _st = parent.start_idx(edge_idx)
@@ -135,24 +139,23 @@ class SheetMetalModel:
 
         # TODO: reduce blend_r if conflicts with the new panel
 
-        # check if the edge is occupied (consider the extra blend_r)
-        st_frac_blend = (start_frac_length + _st_blend_r) / L
-        en_frac_blend = 1 - (end_frac_length + _en_blend_r) / L
+        # Occupied span includes blend taper on each side of [start_frac, end_frac]:
+        #   [start_frac·L − blend_start,  end_frac·L + blend_end]  (clamped to edge)
+        st_frac_blend = max(0.0, (start_frac_length - _st_blend_r) / L)
+        en_frac_blend = min(1.0, 1.0 - (end_frac_length - _en_blend_r) / L)
         if parent.is_edge_occupied(edge_idx, st_frac_blend, en_frac_blend):
             raise ValueError(f"Edge {edge_idx} is occupied by another child panel")  
 
-        parent._register_child(edge_idx, st_frac_blend, en_frac_blend)     
+        parent._register_child(edge_idx, st_frac_blend, en_frac_blend)
+        parent.split_edge_at_fracs(edge_idx, [st_frac_blend, en_frac_blend])
         
         alpha = np.radians(abs(angle_deg))
-        # Use edge-local normal when available (e.g. LoftPanel has varying normal).
-        N_src = (parent.N_at_edge(edge_idx)
-                if hasattr(parent, 'N_at_edge')
-                else parent.N)
         bend_dir  = float(bend_dir) * N_src
 
-        # explicitly calculate the arc
-        p0 = p0_full + start_frac * (p1_full - p0_full)
-        p1 = p0_full + end_frac   * (p1_full - p0_full)
+        p0 = crv.interpolate(start_frac)
+        p1 = crv.interpolate(end_frac)
+        edge_dir = crv.tangent_at_frac((start_frac + end_frac) * 0.5)
+        T_out = n(np.cross(crv.tangent_at_frac(start_frac), N_src))
         arc = PartialBendArc(
             name=f'{parent.name}-{child_name}-arc', p0=p0, p1=p1,
             T_in=T_out, W_in=edge_dir, N_bend=bend_dir,
@@ -232,11 +235,11 @@ class SheetMetalModel:
         
         root_curve = Curve3D.line(arc.p0_out, arc.p1_out)
 
-        if not isinstance(free_curve, Curve3D):
+        if not isinstance(free_curve, BaseCurve3D):
             pts = np.asarray(free_curve, float)
             free_curve = (Curve3D.line(pts[0], pts[1])
                         if pts.ndim == 2 and len(pts) == 2
-                        else Curve3D('polyline', _pts=pts))
+                        else Curve3D.polyline(pts))
 
         profiles = ([root_curve]
                     + (list(intermediate_curves) if intermediate_curves else [])

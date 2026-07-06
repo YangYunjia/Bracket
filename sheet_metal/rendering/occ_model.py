@@ -29,6 +29,7 @@ STEP export produces compact, exact B-Rep files.
 
 import numpy as np
 from ..basics.maths import n
+from ..basics.curve import Arc3D, BSpline3D, Polyline3D
 from .basics import BaseRenderer
 from ..basics.panel import FlatPanel, PolygonPanel, LoftPanel, PipePanel
 from ..basics.bending import PartialBendArc
@@ -119,22 +120,21 @@ def _compound_from_face_lists(faces_list):
 
 # ─── polygon wire builder ─────────────────────────────────────────────────────
 
-def _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W):
-    """Build an exact closed OCC wire for a 2-D flat panel.
+def _flat_panel_wire_occ(edge_curves, corner_trim, origin, T, W):
+    """Build an exact closed OCC wire for a flat panel.
 
-    Corners between straight edges are rounded with GC_MakeArcOfCircle. 
-    - we don't support B-spline edges
+    Each entry in *edge_curves* is a sharp (pre-fillet) Curve3D polyline for
+  one boundary edge.  Corner fillets are applied only at polygon corners
+    (junctions between consecutive edges), not at interior polyline split points.
 
     Parameters
     ----------
-    verts_2d    : (N, 2) CCW polygon vertices in panel local (u, v) frame
-    corner_trim : (N,) trim length along each adjacent edge at every vertex
-                  (0 = sharp corner; final values come from panel.corner_trim)
-    origin, T, W: 3-D panel frame  (3-D point = origin + u*T + v*W)
+    edge_curves : list of Curve3D polyline, one per CCW edge
+    corner_trim : (N,) trim length along each adjacent edge at every corner
+    origin, T, W: 3-D panel frame
     """
-    verts_2d    = np.asarray(verts_2d, float)
+    n_edges = len(edge_curves)
     corner_trim = np.asarray(corner_trim, float)
-    n_edges     = len(verts_2d)
     if len(corner_trim) != n_edges:
         raise ValueError(
             f'corner_trim length {len(corner_trim)} != n_edges {n_edges}')
@@ -146,8 +146,13 @@ def _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W):
         uv = np.asarray(uv, float)
         return origin + float(uv[0]) * W + float(uv[1]) * T
 
-    # ── Precompute arc geometry at each vertex ────────────────────────────────
-    # Arc is inserted only on convex corners with corner_trim[i] > 0.
+    def to_uv(p3):
+        d = np.asarray(p3, float) - origin
+        return np.array([float(np.dot(d, W)), float(np.dot(d, T))])
+
+    corner_uv = [to_uv(edge_curves[i].endpoints()[0]) for i in range(n_edges)]
+
+    # ── Precompute arc geometry at each corner ────────────────────────────────
     arcs = [None] * n_edges   # (P_start_3d, P_mid_3d, P_end_3d) or None
 
     for i in range(n_edges):
@@ -155,9 +160,9 @@ def _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W):
         if trim <= 0.0:
             continue
 
-        v      = verts_2d[i]
-        v_prev = verts_2d[(i - 1) % n_edges]
-        v_next = verts_2d[(i + 1) % n_edges]
+        v      = corner_uv[i]
+        v_prev = corner_uv[(i - 1) % n_edges]
+        v_next = corner_uv[(i + 1) % n_edges]
 
         e_in  = v - v_prev
         e_out = v_next - v
@@ -205,35 +210,46 @@ def _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W):
         arcs[i] = (to_3d(arc_start_2d), to_3d(arc_mid_2d), to_3d(arc_end_2d))
 
     # ── Build OCC edges in CCW order ──────────────────────────────────────────
-    # For each edge i → j:
-    #   - If B-spline: add exact Geom_BSplineCurve edge (no arcs at its endpoints)
-    #   - If straight: add line segment, then arc at vertex j
     edges = []
 
     for i in range(n_edges):
-        j     = (i + 1) % n_edges
+        j   = (i + 1) % n_edges
+        pts = edge_curves[i].sharp_points()
 
-        seg_start = arcs[i][2] if arcs[i] is not None else to_3d(verts_2d[i])
-        seg_end   = arcs[j][0] if arcs[j] is not None else to_3d(verts_2d[j])
+        seg_start = arcs[i][2] if arcs[i] is not None else pts[0]
+        seg_end   = arcs[j][0] if arcs[j] is not None else pts[-1]
 
-        if np.linalg.norm(np.asarray(seg_end) - np.asarray(seg_start)) > 1e-9:
-            edges.append(BRepBuilderAPI_MakeEdge(
-                _to_pnt(seg_start), _to_pnt(seg_end)).Edge())
+        chain = [np.asarray(seg_start, float)]
+        for p in pts[1:-1]:
+            chain.append(np.asarray(p, float))
+        chain.append(np.asarray(seg_end, float))
 
-        # Arc at vertex j (only between two straight edges)
+        deduped = [chain[0]]
+        for p in chain[1:]:
+            if np.linalg.norm(p - deduped[-1]) > 1e-9:
+                deduped.append(p)
+
+        for k in range(len(deduped) - 1):
+            a, b = deduped[k], deduped[k + 1]
+            if np.linalg.norm(b - a) > 1e-9:
+                edges.append(BRepBuilderAPI_MakeEdge(
+                    _to_pnt(a), _to_pnt(b)).Edge())
+
         if arcs[j] is not None:
             P1, Pm, P3 = arcs[j]
             arc = GC_MakeArcOfCircle(_to_pnt(P1), _to_pnt(Pm), _to_pnt(P3))
             if arc.IsDone():
                 edges.append(BRepBuilderAPI_MakeEdge(arc.Value()).Edge())
 
-    if not edges: raise ValueError('No edges created')
+    if not edges:
+        raise ValueError('No edges created')
 
     wb = BRepBuilderAPI_MakeWire()
     for e in edges:
         wb.Add(e)
-        
-    if not wb.IsDone(): raise ValueError('Wire build failed')
+
+    if not wb.IsDone():
+        raise ValueError('Wire build failed')
     return wb.Wire()
 
 
@@ -247,17 +263,10 @@ def _curve3d_to_occ_wire(crv, n_poly=64):
     Curve3D.bspline → exact Geom_BSplineCurve wire
     Curve3D.polyline → polygon wire from stored points
     """
-    kind = crv._kind
 
-    if kind == 'line':
-        edge = BRepBuilderAPI_MakeEdge(_to_pnt(crv.p0), _to_pnt(crv.p1)).Edge()
-        wb = BRepBuilderAPI_MakeWire(edge)
-        if not wb.IsDone(): raise ValueError('Wire build failed')
-        return wb.Wire()
-
-    if kind == 'arc':
+    if isinstance(crv, Arc3D):
         # Sample 3 points: start, mid, end for GC_MakeArcOfCircle
-        pts = crv._eval_raw(np.array([0.0, 0.5, 1.0]))
+        pts = crv.interpolate_raw(np.array([0.0, 0.5, 1.0]))
         arc_geom = GC_MakeArcOfCircle(
             _to_pnt(pts[0]), _to_pnt(pts[1]), _to_pnt(pts[2]))
         if not arc_geom.IsDone(): raise ValueError('Arc build failed')
@@ -266,10 +275,10 @@ def _curve3d_to_occ_wire(crv, n_poly=64):
         if not wb.IsDone(): raise ValueError('Wire build failed')
         return wb.Wire()
 
-    if kind == 'bspline':
-        cp   = crv._cp
-        deg  = crv._deg
-        knts = crv._knots
+    if isinstance(crv, BSpline3D):
+        cp   = crv.control_pts
+        deg  = crv.degree
+        knts = crv.knots
         n_p  = len(cp)
         distinct, mults = [], []
         for k in knts:
@@ -294,17 +303,15 @@ def _curve3d_to_occ_wire(crv, n_poly=64):
         if not wb.IsDone(): raise ValueError('Wire build failed')
         return wb.Wire()
 
-    # polyline / fallback: dense polygon wire
-    if kind == 'polyline':
-        pts = crv._pts
-    pts = crv.sample(n_poly)
-    poly = BRepBuilderAPI_MakePolygon()
-    for p in pts:
-        poly.Add(_to_pnt(p))
-    if not poly.IsDone(): raise ValueError('Polygon build failed')
-    wb = BRepBuilderAPI_MakeWire(poly.Wire())
-    if not wb.IsDone(): raise ValueError('Wire build failed')
-    return wb.Wire()
+    # polyline: exact straight segments between stored sharp points
+    if isinstance(crv, Polyline3D):
+        pts = crv.sharp_points()
+        wm  = BRepBuilderAPI_MakeWire()
+        for k in range(len(pts) - 1):
+            wm.Add(BRepBuilderAPI_MakeEdge(_to_pnt(pts[k]), _to_pnt(pts[k + 1])).Edge())
+        if not wm.IsDone():
+            raise ValueError('Wire build failed')
+        return wm.Wire()
 
 
 def _loft_panel_occ(panel: LoftPanel):
@@ -318,10 +325,6 @@ def _loft_panel_occ(panel: LoftPanel):
     profiles = list(panel.profiles)
     if len(profiles) < 2: raise ValueError('LoftPanel needs at least 2 profiles')
 
-    def _shift_crv(crv, vec):
-        a0, b0 = crv.endpoints()
-        return type(crv).line(np.asarray(a0) + vec, np.asarray(b0) + vec)
-
     # tangent-steering auxiliary profiles
     t_start = getattr(panel, 't_start', None)
     t_end   = getattr(panel, 't_end',   None)
@@ -334,10 +337,10 @@ def _loft_panel_occ(panel: LoftPanel):
 
         sections = [profiles[0]]
         if t_start is not None:
-            sections.append(_shift_crv(profiles[0],  delta * n(t_start)))
+            sections.append(profiles[0].shift(delta * n(t_start)))
         sections.extend(profiles[1:-1])
         if t_end is not None:
-            sections.append(_shift_crv(profiles[-1], -delta * n(t_end)))
+            sections.append(profiles[-1].shift(-delta * n(t_end)))
         sections.append(profiles[-1])
     else:
         sections = profiles
@@ -438,18 +441,6 @@ def _pipe_panel_occ(panel: PipePanel):
 
 # ─── recess shape builders ─────────────────────────────────────────────────────
 
-def _rounded_rect_wire_occ(half_a, half_b, corner_r, center_3d, T, W):
-    """Closed OCC wire for a rounded rectangle centred at center_3d."""
-    verts_2d = np.array([
-        [-half_a, -half_b],
-        [ half_a, -half_b],
-        [ half_a,  half_b],
-        [-half_a,  half_b],
-    ], float)
-    R = min(float(corner_r), min(half_a, half_b))
-    return _flat_panel_wire_occ(verts_2d, R, set(), center_3d, T, W)
-
-
 def _stamped_recess_occ(rec, n_levels=16):
     """TRUE OCC StampedRecess.
 
@@ -457,6 +448,7 @@ def _stamped_recess_occ(rec, n_levels=16):
     footprint at each cross-section level) via ThruSections, then caps the
     bottom with a flat OCC face.  Both shapes are exact OCC B-Rep objects.
     """
+    raise NotImplementedError('StampedRecess is not implemented')
     p       = rec.panel
     T       = np.asarray(p.T, float)
     W       = np.asarray(p.W, float)
@@ -573,6 +565,7 @@ def _polygon_recess_occ(rec, n_levels=16):
     Lofts n_levels+1 polygon-outline wires (inward offset of the outer
     footprint polygon) via ThruSections, then caps with a flat polygon face.
     """
+    raise NotImplementedError('PolygonRecess is not implemented')
     p       = rec.panel
     T       = np.asarray(p.T, float)
     W       = np.asarray(p.W, float)
@@ -605,7 +598,7 @@ def _polygon_recess_occ(rec, n_levels=16):
                 continue
             R_k      = max(0.0, R_outer - u_k)
             origin_k = orig + v_k * Np
-            wire_k   = _flat_panel_wire_occ(poly_k, R_k, set(), origin_k, T, W)
+            wire_k   = _wire_from_uv_polygon(poly_k, R_k, origin_k, T, W)
             if wire_k is not None:
                 thru.AddWire(wire_k)
                 wires_added += 1
@@ -626,7 +619,7 @@ def _polygon_recess_occ(rec, n_levels=16):
         R_bot    = max(0.0, R_outer - u_bot)
         if poly_bot is not None:
             origin_bot = orig + v_bot * Np
-            wire_bot   = _flat_panel_wire_occ(poly_bot, R_bot, set(), origin_bot, T, W)
+            wire_bot   = _wire_from_uv_polygon(poly_bot, R_bot, origin_bot, T, W)
             if wire_bot is not None:
                 fm = BRepBuilderAPI_MakeFace(wire_bot, True)
                 if fm.IsDone():
@@ -719,13 +712,12 @@ class OCC_Renderer(BaseRenderer):
 
         elif isinstance(panel, FlatPanel) or isinstance(panel, PolygonPanel):
 
-            verts_2d    = np.asarray(panel.vertices, float)
-            corner_trim = panel.corner_trim   # final per-vertex trims (incl. extend())
             origin      = np.asarray(panel.origin, float)
             T           = np.asarray(panel.T, float)
             W           = np.asarray(panel.W, float)
 
-            wire = _flat_panel_wire_occ(verts_2d, corner_trim, origin, T, W)
+            wire = _flat_panel_wire_occ(
+                panel.edge_curves, panel.corner_trim, origin, T, W)
             maker = BRepBuilderAPI_MakeFace(wire, True)
             if not maker.IsDone(): raise ValueError('MakeFace failed')
             return maker.Face()
