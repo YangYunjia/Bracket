@@ -561,7 +561,7 @@ Common attributes:
 | `corner_r` | float | Free-corner rounding radius |
 | `corner_trim` | list | Per-vertex trim lengths after filleting |
 
-Key methods: `edge(i)`, `edge_curve(i) → Curve3D`, `edge_length(i)`,
+Key methods: `edge(i)`, `edge_curve(i) → Curve3D`,
 `is_edge_occupied(...)`, `_register_child(...)`.
 
 #### LoftPanel / PipePanel

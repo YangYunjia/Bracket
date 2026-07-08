@@ -669,14 +669,18 @@ class OCC_Renderer(BaseRenderer):
 
         self.n_arc_bend = n_arc_bend
 
+    def meshing(self, shape) -> None:
+        """Meshing an OCC shape into a list of triangles.
+        """
+        mesh = BRepMesh_IncrementalMesh(shape, self.linear_deflection,
+                                False, self.angular_deflection, True)
+        mesh.Perform()
+
     def tessellate(self, shape):
         """Tessellate an OCC shape into a list of triangles.
         """
     
-        mesh = BRepMesh_IncrementalMesh(shape, self.linear_deflection,
-                                        False, self.angular_deflection, True)
-        mesh.Perform()
-
+        self.meshing(shape)
         result = []
         exp = TopExp_Explorer(shape, TopAbs_FACE)
         while exp.More():
@@ -829,6 +833,7 @@ class OCC_Renderer(BaseRenderer):
         for shapes in [groups['arcs'], groups['panels']]:
         # for group, shapes in groups.items():
             for name, shape in shapes.items():
+                self.meshing(shape)
                 builder.Add(compound, shape)
         # Write the compound with all shapes to a single STL file
         writer.Write(compound, str(filepath))

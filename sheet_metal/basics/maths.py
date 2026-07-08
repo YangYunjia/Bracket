@@ -5,6 +5,10 @@ def n(v):
     m = np.linalg.norm(v)
     return v / m if m > 1e-12 else v
 
+def rot(v, k, deg):
+    v, k = np.asarray(v, float), n(np.asarray(k, float))
+    t = np.radians(deg)
+    return v * np.cos(t) + np.cross(k, v) * np.sin(t) + k * np.dot(k, v) * (1.0 - np.cos(t))
 
 # ── polygon helpers ───────────────────────────────────────────────────────────
 
