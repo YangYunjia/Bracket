@@ -43,7 +43,7 @@ def prof(shift_t, shift_n=0.0, shift_w=0.0,
 
 def _profile_curve(origin, _T, _N, _W, root_width, spec):
     """Build one Curve3D; leading corner pinned to the T_mid guide."""
-    st = spec['shift_t']
+    st = spec['shift_t'] # relative
     sn = spec.get('shift_n', 0.0)
     sw = spec.get('shift_w', 0.0)
     w  = spec.get('w')
@@ -86,6 +86,13 @@ def build_chain_bracket(p_input: dict):
                      corner_r=p['corner_r_main'])
 
     arc1 = m.extend_bend(p1, edge_idx=2, angle_deg=p['mid_ang'], bend_r=bend_r1, child_name='MID')
+
+    keys = ['shift_t', 'shift_n', 'shift_w', 'twist', 'twist2']
+    accu_shift_t = {key: 0.0 for key in keys}
+    for s in p['mid_profiles']:
+        for key in keys:
+            s[key] += accu_shift_t[key]
+            accu_shift_t[key] = float(s[key])
 
     curves = [_profile_curve(origin=0.5 * (arc1.p0_out + arc1.p1_out), _T=arc1.T_out, _N=arc1.N_out, _W=arc1.W, root_width=arc1.L, spec=s)
               for s in p['mid_profiles']]
